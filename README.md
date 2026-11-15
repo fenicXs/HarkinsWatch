@@ -7,7 +7,7 @@ A personal automation bot for Harkins Theatres (Arizona Mills). It watches for m
 1. **Tracks movies** — scrapes Harkins' Now Showing / Coming Soon pages and remembers what it's already seen.
 2. **Watchlist** — text the bot a movie title; if it's not out yet, it's added to a watchlist and you're pinged the moment it's Now Showing.
 3. **Booking flow** — pick a date, then (if the movie plays in more than one format) a screen type, then a showtime — all via Telegram buttons. The bot opens the seat map, auto-selects 2 seats near the center, and sends back the checkout link so you can review and pay on your phone.
-4. **Notifications** — alerts go out over Telegram (primary) and/or email.
+4. **Notifications** — alerts go out over Telegram: new releases hitting Now Showing, and watchlisted movies becoming bookable.
 
 ### Example flow
 
@@ -69,9 +69,7 @@ HarkinsWatch/
 ├── booker.py                      # Opens a showtime's seat map and books 2 center seats (deterministic + AI fallback)
 ├── seat_ai.py                       # Gemini-vision fallback: reads the seat map as an image when clicking blind fails
 ├── telegram.py                        # Thin wrapper for sending a Telegram message
-├── emailer.py                          # Thin wrapper for sending an email via Gmail SMTP
-├── main.py                              # Older/simpler entry point (email+Telegram alerts, no interactive booking flow)
-├── explore.py                             # One-off script used to explore the Harkins site's selectors
+├── explore.py                           # One-off script used to explore the Harkins site's selectors
 ├── explore_booking.py                       # Manual tool: opens a real browser window, saves HTML snapshots as you click around
 ├── test_setup.py                              # Sanity check that Playwright/Chromium is installed correctly
 │
@@ -82,7 +80,7 @@ HarkinsWatch/
 ├── browser_profile/                 # Persistent Chromium profile (keeps you logged into Harkins between runs)
 ├── requirements.txt                  # Python dependencies (playwright, python-dotenv)
 ├── procedure.md                       # Dev log / build notes for this project, in order
-├── .env                                 # Secrets: Telegram bot token/chat id, email creds, Gemini API key (not committed)
+├── .env                                 # Secrets: Telegram bot token/chat id, Gemini API key (not committed)
 └── .gitignore
 ```
 
@@ -95,7 +93,7 @@ HarkinsWatch/
 Runs an infinite polling loop against the Telegram `getUpdates` API. Handles:
 - Free text → fuzzy-matches it to a Harkins movie title (`add_watch.find_matches`) and asks you to confirm with a number.
 - Confirming a match → if the movie is Now Showing, starts the booking flow immediately; if it's Coming Soon, adds it to the watchlist for later.
-- Every 30 minutes → re-checks Harkins; any watchlisted movie that's now showing gets a "🎬 ... 🎟 Book seats" push.
+- Every 30 minutes → re-checks Harkins; any brand-new Now Showing title gets a plain "🆕 ..." alert, and any watchlisted movie that's now showing gets a "🎬 ... 🎟 Book seats" push.
 - Date picker (`offer_dates`) → next 7 days as buttons.
 - Screen-type picker (`handle_format`) → only shown if a movie plays in more than one format that day.
 - Showtime picker (`_send_time_buttons`) → tapping a time calls `handle_book()`, which runs `booker.book_session()` and replies with the seats held + payment link, or a manual-pick link if auto-booking couldn't find a spot.
@@ -119,11 +117,24 @@ The seat-booking logic. Given a showtime URL:
 ### `seat_ai.py`
 Wraps the Google Gemini API (free tier, `gemini-flash-latest`). Sends a screenshot of the seat-map canvas with a prompt describing which seat icons are available vs. taken, gets back normalized coordinates, click-tests each to confirm it actually selects a real seat, then hands the confirmed set back to `booker.py` to pick the best adjacent pair.
 
-### `telegram.py` / `emailer.py`
-Small, single-purpose senders reading credentials from `.env`.
+### `telegram.py`
+Small, single-purpose sender reading the bot token/chat id from `.env`.
 
-### `main.py`
-An earlier, non-interactive version of the workflow (scrape → email/Telegram alert → auto-book). Superseded by `bot.py`'s interactive flow — note it still imports `book_movie` from `booker.py`, which no longer exists there (`booker.py` now exports `book_session`), so `main.py` is out of date and not meant to be run.
+## Results
+
+Live benchmark on 2026-11-14: 10 real `book_session()` runs against next-day Arizona Mills showtimes (7 standard/Digital and 3 IMAX). Each run held 2 seats and stopped at the payment page, so no payment was made.
+
+| Metric | Result |
+|---|---|
+| Standard screens booked end-to-end (seats held + payment link) | **7 / 7 (100%)** |
+| Time per booking, standard (seat map → payment page) | **median 12.9 s** (range 11.9–15.3 s) |
+| Seat-map strategy on standard screens | deterministic DOM picker on every run (0 Gemini calls) |
+| IMAX screens | 0 / 3 auto-booked. The Gemini vision fallback timed out (60 s, retried once), so each run safely returned the manual seat-pick link after ~144 s |
+| Runs that returned a usable link (payment or manual fallback) | **10 / 10** |
+| Now Showing scrape | 65 movies in 9–12 s |
+| Showtime scrape (one movie + date) | median ~7.7 s |
+
+Earlier manual run: The Odyssey (IMAX 70mm) was booked through the Gemini vision path and reached the payment page in ~45 s.
 
 ## Setup
 
@@ -140,9 +151,6 @@ Create a `.env` file with:
 ```
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
-SENDER_EMAIL=...
-SENDER_APP_PASSWORD=...
-RECIPIENT_EMAIL=...
 GEMINI_API_KEY=...
 ```
 (Get a free Gemini key at aistudio.google.com/apikey — used only as a fallback for hard-to-click seat maps.)

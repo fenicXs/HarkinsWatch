@@ -31,7 +31,7 @@ def main():
     coming_soon = load_json_list(COMING_SOON_FILE)
     all_titles = now_showing + coming_soon
     if not all_titles:
-        print("Caches are empty. Run 'python main.py' first to build them.")
+        print("Caches are empty. Run 'python bot.py' first to build them.")
         return
 
     title_by_lower = {t.lower(): t for t in all_titles}

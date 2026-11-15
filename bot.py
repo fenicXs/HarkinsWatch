@@ -4,7 +4,7 @@ import json
 import requests
 import time
 import datetime
-from tracker import refresh_coming_soon, find_watchlisted_now_showing, remove_from_watchlist, save_seen
+from tracker import refresh_coming_soon, find_watchlisted_now_showing, remove_from_watchlist, find_new_movies
 from dotenv import load_dotenv
 from add_watch import find_matches, add_title
 from scraper import get_now_playing, get_coming_soon, get_showtimes
@@ -121,11 +121,12 @@ CHECK_INTERVAL = 1800   # check every 30 min
 
 
 def run_watch_check():
-    """Refresh caches; notify (with Book button) for watchlisted movies now playing."""
+    """Refresh caches; notify about new releases, and (with Book button) watchlisted movies now playing."""
     try:
         refresh_coming_soon()
         current = get_now_playing()
-        save_seen({m["title"] for m in current})
+        for movie in find_new_movies(current):
+            send(f"🆕 '{movie['title']}' just hit Now Showing at Harkins!\n{movie['url']}")
         for movie in find_watchlisted_now_showing(current):
             mid = str(len(pending_movies))
             pending_movies[mid] = movie["title"]

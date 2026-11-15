@@ -19,7 +19,7 @@ deactivate
 # 1. Install the Playwright Python package into sandbox
 pip install playwright
 
-# 2. Download the browser binaries (required — this is the step people forget)
+# 2. Download the browser binaries
 playwright install
 
 # Or install just one browser:
@@ -36,6 +36,7 @@ playwright install chromium
 # Create explore.py
 explores the Harkins website, sees how the website looks and check all the selectors(buttons, links, boxes etc). 
 page.locator("a")
+reads data in DOM(Document Object Model) format(a tree structure)
 
 # Create scraper.py 
 this does data collection, it reads the website and scrapes all the movies title from the Harkins page
@@ -47,11 +48,6 @@ each showtime also has its screen type (CINÉ XL, 3D, IMAX, Digital)
 this looks into the existing list of movies which was scraped previously and compare with the new list to know the new movies in the list
 "seen_movies.json" and "coming_soon.json" are the memory of "tracker.py"
 
-# Create emailer.py
-loads crediential from .env(has sender mail, receiver mail and app password)
-sends mail using Gmail SMTP 
-the email contain the New Movie Releases
-
 # Created the Telegram bot
 1. search '@BotFather', send '/newbot'
 2. Selected bot name - "HarkinsWatchBot", got link to open my bot and got bot token 
@@ -59,13 +55,13 @@ the email contain the New Movie Releases
 4. Added the token and chat id to '.env' file
 
 # Created Telegram.py 
-Works like email.py
+sends a message to my chat using the bot token + chat id
 Telegram works over a simple web request (HTTP), and requests is the standard Python library for that. (Then update your requirements: pip freeze > requirements.txt.)
 
 # Creating a add_watch.py
 this creates a add to watchlist file "watchlist.json"
 'difflib.get_close_matches' finds the closest match to the movie you are trying to add to watchlist
-pick a number in the watchlist to add that movie into watchlist if the movie is in the "Coming Soon" page of the Harkins website. If not in coming soon 
+pick a number in the watchlist to add that movie into watchlist if the movie is in the "Coming Soon" page of the Harkins website. If not in coming soon, it proceeds with the booking right away.
 
 # Create explore_booking.py
 Opens a visible Chrome using your saved profile (launch_persistent_context) — so you stay logged in
@@ -95,10 +91,15 @@ Gemini AI looks at a screenshot and tells which seats are available
 we click those seats to confirm, then pick 2 next to each other in the center
 
 # Create bot.py (this is the main file to run)
-this is the whole app, keeps running and listening to Telegram
+this is the whole app, keeps running and listening to Telegram. get_updates(offset) keeps running in loop to check if there is any message from telegram.
 1. text a movie name -> shows matches -> reply a number to pick
 2. pick a date -> pick screen type -> pick a showtime
-3. it books 2 center seats and sends the payment link
+3. it books 2 best seats and sends the payment link
 4. review and pay on the phone
 also checks the watchlist every 30 mins, if a watchlisted movie is now showing it sends a "Book seats" button
 run it with: python bot.py
+
+# Added new-release alerts to bot.py's 30 min watch check
+'find_new_movies' (in tracker.py) already existed but nothing ever called it
+now run_watch_check() calls it too, sends a plain Telegram message for any movie that's new to "Now Showing"
+had to remove the old standalone save_seen() call in run_watch_check since find_new_movies saves seen_movies.json itself, doing both would wipe the list before the diff could run
