@@ -326,6 +326,15 @@ Done when: using the new bot (its own token, C2) while the legacy bot is also ru
 
 Tests: the fixture parse returns the expected titles, times and formats; a suspect snapshot sends no alert; a duplicate alert is suppressed by `dedupe_key`; the first check sends no alerts; jitter stays within ±20%; every callback string built by `keyboards.py` is at most 64 bytes; the request budget blocks the 11th request in a minute; a 429 sets `blocked_until`.
 
+**Changes made during M3 (not in the first plan):**
+- The extractors take a Playwright `Page` (`extract_movie_links`, `extract_showtimes`) instead of an HTML string, so tests load a saved fixture with `page.set_content()` and run the same code as the live site. Fixtures are the rendered pages with scripts, styles and svg stripped (`scripts/explore_site.py --strip`): 142-212 KB each instead of 1 MB.
+- The format is read from the group's `data-testid="movie-showtime-category"` first (more stable than the generated class), with the legacy `sc-d9066650-9` class as the fallback; both are tested.
+- Watch alerts are **durable**: a watch's alert is derived from stored state (a recorded signal with no delivered alert), so an alert Telegram refused is retried on the next check instead of being lost. A `listed` alert still owed is dropped once the movie is on sale.
+- A watch attaches to a listed movie only on a clear match (`match_for_watch`: one substring match, or a title equal to the query); close spellings never attach.
+- `/watch` on an already-playing movie, and the "Book seats" button, go to the date picker; `book:` taps answer "Booking arrives in a later update" until M4.
+- `worker/handlers/__init__.py` holds `WorkerEnv`; the worker no longer uses `core/lifecycle.py` (deleted); `tzdata` is a pinned dependency because Windows has no time-zone database; `probe_signals` scheduling waits for the first chain with SIGNALS (M5); `HarkinsChain.capabilities` is WATCH | SHOWTIMES until M4 adds BOOK.
+- The parity check (`scripts/parity_check.py`) found the new and legacy sides identical on the real captured page: 2 new releases and 1 watch fire. A user who is both watching a title and subscribed gets one message on the new side where legacy sent two (deliberate).
+
 Done when (parity test):
 1. Copy `legacy/` to a temp folder, so `legacy/data` is untouched.
 2. Parse `now_showing.html` into `[{"title","url"}]` dicts and pass them to the temp copy's `tracker.find_new_movies` and `find_watchlisted_now_showing`, with a seen-set missing 2 titles and a watchlist holding 1 of them.

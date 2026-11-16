@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     llm_text_fallback_api_key: SecretStr | None = None
     llm_text_fallback_timeout_s: int = 45
 
+    def require_token(self) -> SecretStr:
+        """The bot token (the worker sends alerts with it), or raise if it is missing."""
+        if self.telegram_bot_token is None:
+            raise ValueError("Missing required setting: TELEGRAM_BOT_TOKEN")
+        return self.telegram_bot_token
+
     def require_bot(self) -> tuple[SecretStr, int]:
         """Return the bot token and admin user id, or raise if either is missing."""
         token, admin_id = self.telegram_bot_token, self.admin_telegram_user_id

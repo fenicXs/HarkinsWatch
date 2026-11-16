@@ -154,13 +154,15 @@ async def test_picking_a_coming_soon_movie_saves_a_watch(env: Env, notifier: Fak
     assert len(await _watches(env, uid)) == 1
 
 
-async def test_picking_a_movie_that_is_already_playing_saves_nothing(
+async def test_picking_a_movie_that_is_already_playing_offers_dates_and_saves_nothing(
     env: Env, notifier: FakeNotifier
 ) -> None:
     uid = await _approved_user(env, 1)
     moana = await _add_movie(env, "moana", "now_showing")
     await watch.handle_watch_pick(env, _sender(1), moana.id)
-    assert "already playing" in notifier.to(1)[0]
+    assert notifier.to(1) == ["Moana: pick a date."]
+    assert [data for _, data in notifier.buttons_to(1)][0].startswith(f"date:{moana.id}:")
+    assert len(notifier.buttons_to(1)) == 7
     assert await _watches(env, uid) == []
 
 

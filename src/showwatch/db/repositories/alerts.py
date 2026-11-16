@@ -1,5 +1,6 @@
 """Alert de-duplication: one row per (user, dedupe_key)."""
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,3 +16,13 @@ async def try_record(session: AsyncSession, user_id: int, dedupe_key: str) -> bo
         .returning(tables.Alert.id)
     )
     return (await session.scalar(stmt)) is not None
+
+
+async def was_sent(session: AsyncSession, user_id: int, dedupe_key: str) -> bool:
+    """Has this alert already been delivered to this user?"""
+    row = await session.scalar(
+        select(tables.Alert.id).where(
+            tables.Alert.user_id == user_id, tables.Alert.dedupe_key == dedupe_key
+        )
+    )
+    return row is not None

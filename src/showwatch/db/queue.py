@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -81,6 +81,35 @@ async def enqueue(
     await session.flush()
     await session.refresh(row)
     return Job.model_validate(row)
+
+
+async def has_open_job(
+    session: AsyncSession, kind: str, *, chain_id: int | None, city_id: int | None
+) -> bool:
+    """Is a job of this kind for this chain and city already queued or running?"""
+    stmt = select(
+        exists().where(
+            tables.Job.kind == kind,
+            tables.Job.status.in_(("queued", "running")),
+            tables.Job.chain_id.is_(None) if chain_id is None else tables.Job.chain_id == chain_id,
+            tables.Job.city_id.is_(None) if city_id is None else tables.Job.city_id == city_id,
+        )
+    )
+    return bool(await session.scalar(stmt))
+
+
+async def last_finished_at(
+    session: AsyncSession, kind: str, *, chain_id: int, city_id: int
+) -> datetime | None:
+    """When the most recent job of this kind for this chain and city finished (done or failed)."""
+    return await session.scalar(
+        select(func.max(tables.Job.updated_at)).where(
+            tables.Job.kind == kind,
+            tables.Job.status.in_(("done", "failed")),
+            tables.Job.chain_id == chain_id,
+            tables.Job.city_id == city_id,
+        )
+    )
 
 
 async def claim(

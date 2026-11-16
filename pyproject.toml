@@ -17,6 +17,7 @@ dependencies = [
     "playwright==1.65.2",
     "httpx==0.28.1",
     "structlog==26.1.0",
+    "tzdata==2026.6",
 ]
 
 [dependency-groups]
@@ -70,6 +71,11 @@ include = [
     "src/showwatch/bot/app.py",
     "src/showwatch/bot/keyboards.py",
     "src/showwatch/notify.py",
+    "src/showwatch/chains/*",
+    "src/showwatch/chains/harkins/*",
+    "src/showwatch/worker/scheduler.py",
+    "src/showwatch/worker/runner.py",
+    "src/showwatch/worker/handlers/*",
 ]
 fail_under = 85
 show_missing = true

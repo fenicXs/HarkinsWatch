@@ -27,6 +27,9 @@ class FakeNotifier:
     def to(self, chat_id: int) -> list[str]:
         return [text for cid, text, _ in self.sent if cid == chat_id]
 
+    def sent_chats(self) -> set[int]:
+        return {cid for cid, _, _ in self.sent}
+
     def buttons_to(self, chat_id: int) -> list[tuple[str, str]]:
         """(label, callback data) of every button sent to a chat, in order."""
         return [

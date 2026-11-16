@@ -36,3 +36,21 @@ def find_matches(query: str, titles: Sequence[str]) -> list[str]:
     if not matches:
         matches = get_close_matches(needle, list(title_by_key), n=5, cutoff=0.3)
     return [title_by_key[key] for key in matches[:5]]
+
+
+def match_for_watch(query: str, titles: Sequence[str]) -> str | None:
+    """The one title a saved watch should attach to, or None if it is unclear.
+
+    Stricter than `find_matches`: close spellings never count, because attaching a watch to the
+    wrong film would send the user a wrong alert. A single substring match wins; with several
+    (for example "Dune" and "Dune (IMAX 70mm)") only a title equal to the query counts.
+    """
+    needle = _match_key(query)
+    if not needle:
+        return None
+    keyed = {title: _match_key(title) for title in titles}
+    containing = [title for title, key in keyed.items() if needle in key]
+    if len(containing) == 1:
+        return containing[0]
+    exact = [title for title in containing if keyed[title] == needle]
+    return exact[0] if len(exact) == 1 else None

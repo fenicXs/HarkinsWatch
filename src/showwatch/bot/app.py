@@ -4,6 +4,7 @@ Everything of substance lives in `bot/handlers/`; this file only extracts who se
 runs the access gate before every handler, and routes commands and button taps.
 """
 
+from datetime import date
 from typing import Any
 
 import structlog
@@ -25,7 +26,7 @@ from telegram.ext import (
 
 from showwatch import __version__
 from showwatch.bot import keyboards
-from showwatch.bot.handlers import Env, Sender, access, watch
+from showwatch.bot.handlers import Env, Sender, access, search, watch
 from showwatch.core.db import check_connection
 from showwatch.core.settings import Settings
 from showwatch.notify import TelegramNotifier
@@ -119,6 +120,10 @@ async def _button(update: Update, context: Context) -> None:
         await watch.handle_city_pick(env, sender, ref)
     elif action == keyboards.WATCHFOR:
         await watch.handle_watch_for(env, sender, ref)
+    elif action == keyboards.DATE:
+        await _date_button(env, sender, ref)
+    elif action == keyboards.FMT:
+        await _format_button(env, sender, ref)
     elif ref.isascii() and ref.isdigit():
         number = int(ref)
         if action == keyboards.APPROVE:
@@ -129,6 +134,35 @@ async def _button(update: Update, context: Context) -> None:
             await watch.handle_watch_pick(env, sender, number)
         elif action == keyboards.UNWATCH:
             await watch.handle_unwatch_pick(env, sender, number)
+        elif action == keyboards.PICK:
+            await search.handle_pick(env, sender, number)
+        elif action == keyboards.BOOK:
+            await search.handle_book(env, sender, number)
+
+
+def _parse_day(text: str) -> date | None:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+async def _date_button(env: Env, sender: Sender, ref: str) -> None:
+    """`date:<movie_id>:<YYYY-MM-DD>`"""
+    movie_id, _, day_text = ref.partition(":")
+    day = _parse_day(day_text)
+    if movie_id.isascii() and movie_id.isdigit() and day is not None:
+        await search.handle_date(env, sender, int(movie_id), day)
+
+
+async def _format_button(env: Env, sender: Sender, ref: str) -> None:
+    """`fmt:<movie_id>:<YYYY-MM-DD>:<n>`"""
+    parts = ref.split(":")
+    if len(parts) != 3 or not all(p.isascii() and p.isdigit() for p in (parts[0], parts[2])):
+        return
+    day = _parse_day(parts[1])
+    if day is not None:
+        await search.handle_format(env, sender, int(parts[0]), day, int(parts[2]))
 
 
 async def on_startup(application: App) -> None:

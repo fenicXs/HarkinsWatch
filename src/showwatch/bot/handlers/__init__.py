@@ -1,7 +1,9 @@
 """Handler logic. Each function takes the shared `Env` and a `Sender`, never Telegram objects,
 so it can be tested with a fake notifier and a real database; `bot/app.py` does the adapting."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,3 +24,4 @@ class Env:
     session_factory: async_sessionmaker[AsyncSession]
     notifier: Notifier
     admin_telegram_user_id: int
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC)

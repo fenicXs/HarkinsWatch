@@ -292,3 +292,60 @@ async def test_startup_asks_the_admin_again_about_requests_still_waiting(
     assert len(bot.to(ADMIN_ID)) == 1
     assert "Ann" in bot.to(ADMIN_ID)[0]
     assert [d.split(":")[0] for d in bot.callback_data_to(ADMIN_ID)] == ["approve", "deny"]
+
+
+async def test_the_search_buttons_are_routed_to_the_search_handlers(
+    application: App, bot: FakeBot
+) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    factory = application.bot_data["env"].session_factory
+    async with factory() as session, session.begin():
+        chain = await catalog.get_chain_by_code(session, "harkins")
+        phx = await catalog.get_city_by_code(session, "phx")
+        assert chain and phx
+        movie, _ = await movies.upsert_movie(
+            session,
+            chain.id,
+            phx.id,
+            MovieListing("moana", "Moana", "https://example.test/m", "now_showing"),
+        )
+        admin = await users.get_by_telegram_id(session, ADMIN_ID)
+        assert admin
+        await users.set_current_city(session, admin.id, phx.id)
+    today = datetime.now(ZoneInfo("America/Phoenix")).date().isoformat()
+
+    await _feed(application, callback_update(1, ADMIN_ID, f"pick:{movie.id}", name="Root"))
+    assert bot.to(ADMIN_ID)[-1] == "Moana: pick a date."
+    assert bot.callback_data_to(ADMIN_ID)[0] == f"date:{movie.id}:{today}"
+
+    await _feed(application, callback_update(2, ADMIN_ID, f"date:{movie.id}:{today}", name="Root"))
+    assert bot.to(ADMIN_ID)[-1] == "Looking up showtimes…"
+
+    await _feed(application, callback_update(3, ADMIN_ID, f"fmt:{movie.id}:{today}:0", name="Root"))
+    assert bot.to(ADMIN_ID)[-1] == "Those showtimes changed. Pick the date again."
+
+    await _feed(application, callback_update(4, ADMIN_ID, "book:5", name="Root"))
+    assert bot.to(ADMIN_ID)[-1] == "Booking arrives in a later update."
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        "date:notanumber:2026-11-17",
+        "date:5:not-a-date",
+        "date:5",
+        "fmt:5:2026-11-17",
+        "fmt:5:bad:0",
+        "fmt:x:2026-11-17:0",
+        "pick:x",
+        "book:\u0663",
+    ],
+)
+async def test_malformed_search_buttons_are_ignored(
+    application: App, bot: FakeBot, data: str
+) -> None:
+    await _feed(application, callback_update(1, ADMIN_ID, data, name="Root"))
+    assert bot.sent == []
+    assert bot.answered == ["cb1"]

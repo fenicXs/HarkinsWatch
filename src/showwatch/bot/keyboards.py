@@ -6,6 +6,7 @@ button can only ever act on the record it was made for. Each string is at most 6
 """
 
 from collections.abc import Sequence
+from datetime import date
 
 from showwatch.domain.models import City, Movie
 from showwatch.notify import CALLBACK_DATA_MAX_BYTES, Button, Buttons
@@ -16,6 +17,10 @@ WATCHPICK = "watchpick"
 UNWATCH = "unwatch"
 CITY = "city"
 WATCHFOR = "watchfor"
+PICK = "pick"
+DATE = "date"
+FMT = "fmt"
+BOOK = "book"
 
 MAX_LABEL = 60  # keep long movie titles from filling the screen
 
@@ -56,6 +61,28 @@ def watch_for(query: str) -> Button | None:
     if len(data.encode()) > CALLBACK_DATA_MAX_BYTES:
         return None
     return Button("None of these: keep watching for my words", data)
+
+
+def book_seats(movie_id: int) -> Buttons:
+    """The "Book seats" button on alerts: starts the date picker for this movie."""
+    return [[Button("Book seats", callback_data(PICK, movie_id))]]
+
+
+def date_choices(movie_id: int, days: Sequence[date]) -> Buttons:
+    return [[Button(d.strftime("%a %b %d"), f"{DATE}:{movie_id}:{d.isoformat()}")] for d in days]
+
+
+def format_choices(movie_id: int, day: date, formats: Sequence[str]) -> Buttons:
+    """One button per screen type; the index points into the day's sorted list of formats."""
+    return [
+        [Button(_label(fmt), f"{FMT}:{movie_id}:{day.isoformat()}:{index}")]
+        for index, fmt in enumerate(formats)
+    ]
+
+
+def time_choices(times: Sequence[tuple[int, str]]) -> Buttons:
+    """One button per showtime: `(showtime_id, label)`."""
+    return [[Button(label, callback_data(BOOK, showtime_id))] for showtime_id, label in times]
 
 
 def watch_choices(items: Sequence[tuple[int, str]]) -> Buttons:

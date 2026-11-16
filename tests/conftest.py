@@ -14,7 +14,9 @@ from dbtools import migrate_sync, recreate_database
 from showwatch.bot.handlers import Env
 from showwatch.bot.handlers.access import ensure_admin
 from showwatch.core.settings import Settings
+from showwatch.worker.handlers import WorkerEnv
 from telegramfakes import FakeNotifier
+from workerfakes import FakeChain, make_worker_env
 
 # Tables the tests write to. Reference tables (cities, chains, theatres) keep their seed rows.
 MUTABLE_TABLES = "alerts, signals, watch_items, showtimes, movies, jobs, chain_snapshots, users"
@@ -77,3 +79,18 @@ async def env(session_factory: async_sessionmaker[AsyncSession], notifier: FakeN
     env = Env(session_factory=session_factory, notifier=notifier, admin_telegram_user_id=ADMIN_ID)
     await ensure_admin(env)
     return env
+
+
+# --- worker tests ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def chain() -> FakeChain:
+    return FakeChain()
+
+
+@pytest.fixture
+def worker_env(
+    session_factory: async_sessionmaker[AsyncSession], notifier: FakeNotifier, chain: FakeChain
+) -> WorkerEnv:
+    return make_worker_env(session_factory, notifier, chain)

@@ -3,7 +3,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from showwatch.bot import keyboards
-from showwatch.bot.handlers import Env, Sender
+from showwatch.bot.handlers import Env, Sender, search
 from showwatch.db.repositories import catalog, movies, users, watches
 from showwatch.domain.models import Movie, User, WatchItem
 from showwatch.domain.title_match import find_matches
@@ -132,6 +132,7 @@ def _movies_with_titles(listed: list[Movie], titles: list[str]) -> list[Movie]:
 
 
 async def handle_watch_pick(env: Env, sender: Sender, movie_id: int) -> None:
+    offer_dates: tuple[Movie, str] | None = None
     async with env.session_factory() as session, session.begin():
         user = await _user(session, sender)
         if user is None:
@@ -142,8 +143,11 @@ async def handle_watch_pick(env: Env, sender: Sender, movie_id: int) -> None:
         elif movie is None or movie.city_id != user.current_city_id:
             text = "That movie is no longer available."
         elif movie.status == "now_showing":
-            # Saves nothing: the date and showtime flow arrives with M3.
-            text = f"{movie.title} is already playing. Booking arrives in a later update."
+            # Saves nothing: an already-playing movie goes straight to the date picker.
+            city = await catalog.get_city(session, user.current_city_id)
+            assert city is not None
+            offer_dates = (movie, city.tz)
+            text = ""
         else:
             assert user.current_city_id is not None
             _, created = await watches.add(
@@ -156,6 +160,9 @@ async def handle_watch_pick(env: Env, sender: Sender, movie_id: int) -> None:
             text = (
                 f"Watching {movie.title}." if created else f"You're already watching {movie.title}."
             )
+    if offer_dates is not None:
+        await search.send_dates(env, sender.chat_id, offer_dates[0], offer_dates[1])
+        return
     await env.notifier.send(sender.chat_id, text)
 
 

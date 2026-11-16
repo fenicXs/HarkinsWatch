@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import Text, and_, cast, delete, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,3 +120,38 @@ async def set_stage(
     await session.flush()
     await session.refresh(row)
     return WatchItem.model_validate(row)
+
+
+async def unalerted_stages(session: AsyncSession, city_id: int) -> list[tuple[WatchItem, str]]:
+    """Watch alerts still owed: a recorded signal whose alert has not been delivered.
+
+    Deciding an alert and delivering it are separate steps, and Telegram can refuse a message,
+    so this is how an undelivered alert is found again on the next check. An older `listed`
+    alert is dropped once the movie has gone on sale: only the `sessions` alert matters then.
+    """
+    alert_key = (
+        literal("watch_open:")
+        + cast(tables.WatchItem.id, Text)
+        + literal(":")
+        + tables.Signal.stage
+    )
+    rows = await session.execute(
+        select(tables.WatchItem, tables.Signal.stage)
+        .join(tables.Signal, tables.Signal.watch_item_id == tables.WatchItem.id)
+        .outerjoin(
+            tables.Alert,
+            and_(
+                tables.Alert.user_id == tables.WatchItem.user_id,
+                tables.Alert.dedupe_key == alert_key,
+            ),
+        )
+        .where(
+            tables.WatchItem.city_id == city_id,
+            tables.Signal.stage.in_(("listed", "sessions")),
+            tables.Alert.id.is_(None),
+        )
+        .order_by(tables.WatchItem.id, tables.Signal.id)
+    )
+    owed = [(WatchItem.model_validate(item), stage) for item, stage in rows.all()]
+    on_sale = {item.id for item, stage in owed if stage == "sessions"}
+    return [(item, stage) for item, stage in owed if not (stage == "listed" and item.id in on_sale)]
