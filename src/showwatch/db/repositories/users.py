@@ -1,6 +1,7 @@
 """Users and their access status. Callers own the transaction; functions only flush."""
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from showwatch.db import tables
@@ -30,21 +31,24 @@ async def create_pending(
 
     The bool is True when a new row was created.
     """
+    # ON CONFLICT makes a concurrent duplicate harmless instead of an error that aborts the
+    # caller's transaction.
+    inserted_id = await session.scalar(
+        insert(tables.User)
+        .values(
+            telegram_user_id=telegram_user_id,
+            chat_id=chat_id,
+            display_name=display_name,
+            status="pending",
+        )
+        .on_conflict_do_nothing(index_elements=["telegram_user_id"])
+        .returning(tables.User.id)
+    )
     row = await session.scalar(
         select(tables.User).where(tables.User.telegram_user_id == telegram_user_id)
     )
-    if row is not None:
-        return User.model_validate(row), False
-    row = tables.User(
-        telegram_user_id=telegram_user_id,
-        chat_id=chat_id,
-        display_name=display_name,
-        status="pending",
-    )
-    session.add(row)
-    await session.flush()
-    await session.refresh(row)
-    return User.model_validate(row), True
+    assert row is not None
+    return User.model_validate(row), inserted_id is not None
 
 
 async def upsert_admin(

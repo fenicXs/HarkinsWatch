@@ -9,11 +9,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from showwatch.db import queue
+from showwatch.db.queue import JobNotOwnedError
 from showwatch.db.repositories import catalog
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
 T0 = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+LATER = T0 + timedelta(hours=1)  # a "now" at which everything enqueued at T0 is runnable
 
 
 async def _ids(session: AsyncSession) -> dict[str, int]:
@@ -50,9 +52,7 @@ async def test_claim_takes_the_oldest_runnable_job_first(session: AsyncSession) 
     assert job.payload == {"n": "oldest"}
 
 
-async def test_two_workers_never_claim_the_same_job(
-    session_factory: SessionFactory,
-) -> None:
+async def test_two_workers_never_claim_the_same_job(session_factory: SessionFactory) -> None:
     async with session_factory() as session:
         for n in range(50):
             await queue.enqueue(session, "search_showtimes", {"n": n}, run_after=T0)
@@ -62,7 +62,7 @@ async def test_two_workers_never_claim_the_same_job(
         claimed: list[int] = []
         while True:
             async with session_factory() as session:
-                job = await queue.claim(session, name, now=T0 + timedelta(hours=1))
+                job = await queue.claim(session, name, now=LATER)
                 await session.commit()
             if job is None:
                 return claimed
@@ -90,25 +90,24 @@ async def test_a_running_book_job_blocks_another_for_the_same_chain_only(
             session, "book", {"n": 3}, chain_id=ids["bms"], run_after=T0
         )
         await session.commit()
-    now = T0 + timedelta(hours=1)
 
     async with session_factory() as session:
-        claimed = await queue.claim(session, "w1", now=now)
+        claimed = await queue.claim(session, "w1", now=LATER)
         await session.commit()
     assert claimed is not None
     assert claimed.id == first.id
 
     async with session_factory() as session:
-        claimed = await queue.claim(session, "w2", now=now)
+        claimed = await queue.claim(session, "w2", now=LATER)
         await session.commit()
     assert claimed is not None
     assert claimed.id == other_chain.id  # harkins is busy, so the bms job runs instead
 
     async with session_factory() as session:
-        assert await queue.claim(session, "w3", now=now) is None  # only the blocked one is left
-        await queue.complete(session, first.id)
+        assert await queue.claim(session, "w3", now=LATER) is None  # only the blocked one is left
+        await queue.complete(session, first.id, "w1")
         await session.commit()
-        later = await queue.claim(session, "w3", now=now)
+        later = await queue.claim(session, "w3", now=LATER)
     assert later is not None
     assert later.id == second.id
 
@@ -126,11 +125,10 @@ async def test_check_chain_is_limited_per_chain_and_city(session_factory: Sessio
             session, "check_chain", {}, chain_id=ids["harkins"], city_id=ids["blr"], run_after=T0
         )
         await session.commit()
-    now = T0 + timedelta(hours=1)
     claimed_ids = []
     for worker in ("w1", "w2", "w3"):
         async with session_factory() as session:
-            job = await queue.claim(session, worker, now=now)
+            job = await queue.claim(session, worker, now=LATER)
             await session.commit()
         if job:
             claimed_ids.append(job.id)
@@ -158,7 +156,6 @@ async def test_claim_survives_a_race_between_two_workers_on_one_chain(
         )
         await queue.enqueue(session, "book", {"n": 2}, chain_id=ids["harkins"], run_after=T0)
         await session.commit()
-    now = T0 + timedelta(hours=1)
 
     async with session_factory() as a, session_factory() as b:
         # Record database errors on B's connection, to prove the unique index is what stopped it.
@@ -169,10 +166,10 @@ async def test_claim_survives_a_race_between_two_workers_on_one_chain(
             "handle_error",
             lambda ctx: errors.append(str(ctx.original_exception)),
         )
-        claimed_by_a = await queue.claim(a, "A", now=now)  # running, not yet committed
+        claimed_by_a = await queue.claim(a, "A", now=LATER)  # running, not yet committed
         assert claimed_by_a is not None
         assert claimed_by_a.id == first.id
-        task_b = asyncio.create_task(queue.claim(b, "B", now=now))
+        task_b = asyncio.create_task(queue.claim(b, "B", now=LATER))
         await asyncio.sleep(0.5)  # B is now waiting on A's uncommitted row
         assert not task_b.done()
         await a.commit()
@@ -186,7 +183,7 @@ async def test_complete_stores_the_result_and_clears_the_lock(session: AsyncSess
     job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
     claimed = await queue.claim(session, "w1", now=T0)
     assert claimed is not None
-    done = await queue.complete(session, job.id, {"kind": "held", "seats": ["G6", "G7"]})
+    done = await queue.complete(session, job.id, "w1", {"kind": "held", "seats": ["G6", "G7"]})
     assert done.status == "done"
     assert done.result == {"kind": "held", "seats": ["G6", "G7"]}
     assert done.locked_by is None
@@ -200,26 +197,24 @@ async def test_fail_retries_with_growing_back_off_then_gives_up(session: AsyncSe
     )
     assert job.max_attempts == 3
 
-    first = await queue.fail(session, job.id, "boom 1", now=T0)
-    assert (first.status, first.attempts, first.run_after) == (
-        "queued",
-        1,
-        T0 + timedelta(seconds=60),
-    )
-    second = await queue.fail(session, job.id, "boom 2", now=T0)
-    assert (second.status, second.attempts, second.run_after) == (
-        "queued",
-        2,
-        T0 + timedelta(seconds=120),
-    )
-    third = await queue.fail(session, job.id, "boom 3", now=T0)
-    assert (third.status, third.attempts, third.last_error) == ("failed", 3, "boom 3")
+    expected = [("queued", 1, 60), ("queued", 2, 120)]
+    for n, (status, attempts, delay) in enumerate(expected, start=1):
+        assert await queue.claim(session, "w1", now=LATER) is not None
+        failed = await queue.fail(session, job.id, "w1", f"boom {n}", now=T0)
+        assert (failed.status, failed.attempts) == (status, attempts)
+        assert failed.run_after == T0 + timedelta(seconds=delay)
+        assert failed.locked_by is None
+
+    assert await queue.claim(session, "w1", now=LATER) is not None
+    last = await queue.fail(session, job.id, "w1", "boom 3", now=T0)
+    assert (last.status, last.attempts, last.last_error) == ("failed", 3, "boom 3")
 
 
 async def test_a_book_job_is_never_retried(session: AsyncSession) -> None:
     ids = await _ids(session)
-    job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"])
-    failed = await queue.fail(session, job.id, "browser crashed", now=T0)
+    job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
+    await queue.claim(session, "w1", now=LATER)
+    failed = await queue.fail(session, job.id, "w1", "browser crashed", now=T0)
     assert failed.status == "failed"
     assert failed.attempts == 1
 
@@ -228,9 +223,49 @@ async def test_requeue_does_not_count_an_attempt(session: AsyncSession) -> None:
     ids = await _ids(session)
     job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
     await queue.claim(session, "w1", now=T0)
-    back = await queue.requeue(session, job.id, 60, now=T0)
+    back = await queue.requeue(session, job.id, "w1", 60, now=T0)
     assert (back.status, back.attempts, back.run_after) == ("queued", 0, T0 + timedelta(seconds=60))
     assert back.locked_by is None
+
+
+async def test_only_the_worker_holding_a_job_can_finish_it(session: AsyncSession) -> None:
+    ids = await _ids(session)
+    job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
+
+    with pytest.raises(JobNotOwnedError):  # still queued: nobody holds it
+        await queue.complete(session, job.id, "w1")
+
+    await queue.claim(session, "w1", now=T0)
+    for call in (
+        queue.complete(session, job.id, "w2"),
+        queue.fail(session, job.id, "w2", "boom"),
+        queue.requeue(session, job.id, "w2", 60),
+    ):
+        with pytest.raises(JobNotOwnedError):  # held by w1, not w2
+            await call
+
+    finished = await queue.complete(session, job.id, "w1")
+    assert finished.attempts == 0  # the refused calls changed nothing
+
+
+async def test_a_swept_worker_cannot_overwrite_the_job_it_lost(session: AsyncSession) -> None:
+    ids = await _ids(session)
+    job = await queue.enqueue(
+        session, "check_chain", {}, chain_id=ids["harkins"], city_id=ids["phx"], run_after=T0
+    )
+    await queue.claim(session, "slow", now=T0)
+    swept = await queue.sweep(session, lock_timeout_s=900, now=T0 + timedelta(minutes=20))
+    assert [j.id for j in swept] == [job.id]
+    reclaimed = await queue.claim(session, "fast", now=T0 + timedelta(minutes=21))
+    assert reclaimed is not None
+
+    with pytest.raises(JobNotOwnedError):  # the slow worker finally finishes: too late
+        await queue.complete(session, job.id, "slow", {"late": True})
+    with pytest.raises(JobNotOwnedError):
+        await queue.fail(session, job.id, "slow", "late failure")
+
+    done = await queue.complete(session, job.id, "fast", {"ok": True})
+    assert (done.result, done.attempts) == ({"ok": True}, 1)  # only the sweep counted an attempt
 
 
 async def test_sweep_recovers_jobs_from_dead_workers(session: AsyncSession) -> None:
@@ -243,7 +278,7 @@ async def test_sweep_recovers_jobs_from_dead_workers(session: AsyncSession) -> N
     for _ in range(3):
         await queue.claim(session, "dead-worker", now=T0)  # all three are now running, locked at T0
 
-    # The search job is claimed again later, so its lock is recent.
+    # The search job's lock is recent.
     await session.execute(
         text("update jobs set locked_at = :at where id = :id"),
         {"at": T0 + timedelta(minutes=14), "id": fresh.id},
@@ -259,8 +294,8 @@ async def test_sweep_recovers_jobs_from_dead_workers(session: AsyncSession) -> N
 
 async def test_finishing_a_job_that_does_not_exist_is_an_error(session: AsyncSession) -> None:
     with pytest.raises(LookupError):
-        await queue.complete(session, 999_999)
+        await queue.complete(session, 999_999, "w1")
     with pytest.raises(LookupError):
-        await queue.fail(session, 999_999, "boom")
+        await queue.fail(session, 999_999, "w1", "boom")
     with pytest.raises(LookupError):
-        await queue.requeue(session, 999_999, 60)
+        await queue.requeue(session, 999_999, "w1", 60)

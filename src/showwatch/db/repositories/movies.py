@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,6 +105,7 @@ async def upsert_showtimes(
                 "starts_at": stmt.excluded.starts_at,
                 "format": stmt.excluded.format,
                 "booking_url": stmt.excluded.booking_url,
+                "updated_at": func.now(),  # onupdate does not fire for ON CONFLICT
             },
         )
         await session.execute(stmt)

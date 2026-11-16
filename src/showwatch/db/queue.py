@@ -124,15 +124,28 @@ async def claim(
     return None
 
 
-async def _get(session: AsyncSession, job_id: int) -> tables.Job:
-    row = await session.get(tables.Job, job_id)
+class JobNotOwnedError(Exception):
+    """The job is no longer running under this worker: it was swept and re-queued, or finished."""
+
+
+async def _owned(session: AsyncSession, job_id: int, worker_id: str) -> tables.Job:
+    """Load a job for update, and make sure this worker still holds it.
+
+    A worker that outlives the lock timeout can be swept and its job claimed again. Without
+    this check, the slow worker would later overwrite the new run's state.
+    """
+    row = await session.get(tables.Job, job_id, with_for_update=True)
     if row is None:
         raise LookupError(f"job {job_id} not found")
+    if row.status != "running" or row.locked_by != worker_id:
+        raise JobNotOwnedError(f"job {job_id} is not running under worker {worker_id}")
     return row
 
 
-async def complete(session: AsyncSession, job_id: int, result: dict[str, Any] | None = None) -> Job:
-    row = await _get(session, job_id)
+async def complete(
+    session: AsyncSession, job_id: int, worker_id: str, result: dict[str, Any] | None = None
+) -> Job:
+    row = await _owned(session, job_id, worker_id)
     row.status = "done"
     row.result = result
     row.locked_by = None
@@ -143,11 +156,16 @@ async def complete(session: AsyncSession, job_id: int, result: dict[str, Any] | 
 
 
 async def fail(
-    session: AsyncSession, job_id: int, error: str, *, now: datetime | None = None
+    session: AsyncSession,
+    job_id: int,
+    worker_id: str,
+    error: str,
+    *,
+    now: datetime | None = None,
 ) -> Job:
     """Record a failed run: retry with back-off, or give up once `max_attempts` is reached."""
     now = now or _now()
-    row = await _get(session, job_id)
+    row = await _owned(session, job_id, worker_id)
     row.attempts += 1
     row.last_error = error
     row.locked_by = None
@@ -164,11 +182,16 @@ async def fail(
 
 
 async def requeue(
-    session: AsyncSession, job_id: int, delay_s: int, *, now: datetime | None = None
+    session: AsyncSession,
+    job_id: int,
+    worker_id: str,
+    delay_s: int,
+    *,
+    now: datetime | None = None,
 ) -> Job:
     """Put a job back without counting an attempt (for example, a locked browser profile)."""
     now = now or _now()
-    row = await _get(session, job_id)
+    row = await _owned(session, job_id, worker_id)
     row.status = "queued"
     row.run_after = now + timedelta(seconds=delay_s)
     row.locked_by = None

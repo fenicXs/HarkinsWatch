@@ -435,6 +435,8 @@ Every table: `id bigint identity primary key`, `created_at timestamptz not null 
 | `chain_snapshots` | `chain_id`, `city_id`, `taken_at default now()`, `movie_count int`, `status` | `status` in `good|suspect` |
 | `parsed_requests` (M6, migration `0002`) | `user_id`, `payload jsonb`, `expires_at` | none |
 
+Also in `0001`: `signals.stage` is limited to `listed|dates|venues|sessions`; foreign keys delete as follows: `watch_items.user_id`, `alerts.user_id` and `signals.watch_item_id` cascade, `showtimes.movie_id` cascades, and `watch_items.movie_id` is set to null when its movie is deleted. Tests in `tests/integration/test_constraints.py` check these and every CHECK list.
+
 Seed rows in `0001`: cities `phx` (`America/Phoenix`) and `blr` (`Asia/Kolkata`); chains `harkins`, `bms`, `district`, `pvrinox` (only `harkins` enabled); theatre `harkins` / `phx` / external_id `16` / "Arizona Mills".
 
 ## Appendix B — Job catalogue
@@ -448,6 +450,7 @@ Seed rows in `0001`: cities `phx` (`America/Phoenix`) and `blr` (`Asia/Kolkata`)
 
 - `enqueue()` fills `jobs.chain_id`, `jobs.city_id` (where the payload names them) and `max_attempts` from this table; `attempts` counts failed runs.
 - Skip predicate in `claim()`: skip a queued job when another `running` job has the same `kind`, the same `chain_id` and, for `check_chain` only, the same `city_id`. If two workers race past that check, the unique index `uq_jobs_running_limit` (Appendix A) rejects the second one and `claim()` moves on to the next job.
+- `complete`, `fail` and `requeue` take the worker id and raise `JobNotOwnedError` unless the job is `running` under that worker, so a worker that was swept and replaced cannot overwrite the new run. A handler that gets this error stops without touching the job.
 - `enqueue(session, kind, payload, *, chain_id=None, city_id=None, run_after=None)` takes the chain and city ids as arguments (the caller knows them); `check_chain` needs both, `book` and `probe_signals` need a chain and no city, `search_showtimes` needs neither.
 - `locked_by` is `<container hostname>:<pid>`; the lock timeout is `JOB_LOCK_TIMEOUT_S` (900 s). `jobs.result` stores the `book` outcome (`held`, `manual` or `failed` plus fields); other kinds leave it null.
 

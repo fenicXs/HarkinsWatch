@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from showwatch.db import tables
@@ -11,6 +12,10 @@ from showwatch.domain.models import WatchItem, WatchStage
 
 
 async def get(session: AsyncSession, watch_item_id: int) -> WatchItem | None:
+    """Fetch any watch by id. For worker-side code only: it is not scoped to a user.
+
+    Handlers acting on an id a user sent must use `list_for_user` or `delete_for_user`.
+    """
     row = await session.get(tables.WatchItem, watch_item_id)
     return WatchItem.model_validate(row) if row else None
 
@@ -25,22 +30,27 @@ async def add(
     format_pref: str | None = None,
 ) -> tuple[WatchItem, bool]:
     """Save a watch. Returns the existing one (and False) if this user already watches the query."""
-    existing = await session.scalar(
+    inserted_id = await session.scalar(
+        insert(tables.WatchItem)
+        .values(
+            user_id=user_id,
+            city_id=city_id,
+            query=query,
+            movie_id=movie_id,
+            format_pref=format_pref,
+        )
+        .on_conflict_do_nothing(constraint="uq_watch_items_user_id_city_id_query")
+        .returning(tables.WatchItem.id)
+    )
+    row = await session.scalar(
         select(tables.WatchItem).where(
             tables.WatchItem.user_id == user_id,
             tables.WatchItem.city_id == city_id,
             tables.WatchItem.query == query,
         )
     )
-    if existing is not None:
-        return WatchItem.model_validate(existing), False
-    row = tables.WatchItem(
-        user_id=user_id, city_id=city_id, query=query, movie_id=movie_id, format_pref=format_pref
-    )
-    session.add(row)
-    await session.flush()
-    await session.refresh(row)
-    return WatchItem.model_validate(row), True
+    assert row is not None
+    return WatchItem.model_validate(row), inserted_id is not None
 
 
 async def list_for_user(session: AsyncSession, user_id: int) -> list[WatchItem]:
