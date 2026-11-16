@@ -78,7 +78,7 @@ async def handle_watch(env: Env, sender: Sender, query: str) -> None:
         if user.current_city_id is None:
             text, buttons = NEED_CITY, None
         else:
-            listed = await movies.list_for_city(session, user.current_city_id)
+            listed = await movies.list_for_city(session, user.current_city_id, current_only=True)
             titles = find_matches(query, [m.title for m in listed])
             chosen = _movies_with_titles(listed, titles)
             if chosen:

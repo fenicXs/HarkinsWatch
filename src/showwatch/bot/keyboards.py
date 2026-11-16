@@ -5,6 +5,7 @@ button can only ever act on the record it was made for. Each string is at most 6
 (`Button` enforces it).
 """
 
+import hashlib
 from collections.abc import Sequence
 from datetime import date
 
@@ -72,11 +73,16 @@ def date_choices(movie_id: int, days: Sequence[date]) -> Buttons:
     return [[Button(d.strftime("%a %b %d"), f"{DATE}:{movie_id}:{d.isoformat()}")] for d in days]
 
 
+def format_code(fmt: str) -> str:
+    """A short stable code for a screen type, so the button does not depend on list order."""
+    return hashlib.sha1(fmt.encode()).hexdigest()[:8]  # noqa: S324 (an id, not security)
+
+
 def format_choices(movie_id: int, day: date, formats: Sequence[str]) -> Buttons:
-    """One button per screen type; the index points into the day's sorted list of formats."""
+    """One button per screen type; its code identifies the format (the name may not fit 64 bytes)."""
     return [
-        [Button(_label(fmt), f"{FMT}:{movie_id}:{day.isoformat()}:{index}")]
-        for index, fmt in enumerate(formats)
+        [Button(_label(fmt), f"{FMT}:{movie_id}:{day.isoformat()}:{format_code(fmt)}")]
+        for fmt in formats
     ]
 
 

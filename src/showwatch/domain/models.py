@@ -88,6 +88,8 @@ class Movie(_Row):
     url: str
     status: MovieStatus
     first_seen_at: datetime
+    last_seen_at: datetime
+    released_at: datetime | None
 
 
 class Showtime(_Row):
@@ -98,6 +100,7 @@ class Showtime(_Row):
     starts_at: datetime
     format: str
     booking_url: str
+    updated_at: datetime
 
 
 class WatchItem(_Row):

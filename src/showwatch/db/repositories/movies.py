@@ -1,10 +1,10 @@
 """Movies, showtimes and the per-chain scrape snapshots that guard the baseline."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, and_, cast, func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,11 +16,15 @@ from showwatch.domain.models import (
     MovieStatus,
     Showtime,
     ShowtimeListing,
+    User,
 )
 from showwatch.domain.title_match import normalize_title
 
 # A scrape below this share of the last good movie count is treated as a broken scrape.
 SUSPECT_BELOW_FRACTION = 0.5
+
+# A movie not seen on a good scrape for this long has left the lists.
+LISTED_WINDOW = timedelta(days=2)
 
 MovieChange = Literal["inserted", "status_changed", "unchanged"]
 
@@ -31,12 +35,19 @@ async def get(session: AsyncSession, movie_id: int) -> Movie | None:
 
 
 async def upsert_movie(
-    session: AsyncSession, chain_id: int, city_id: int, listing: MovieListing
+    session: AsyncSession,
+    chain_id: int,
+    city_id: int,
+    listing: MovieListing,
+    *,
+    mark_release: bool = True,
 ) -> tuple[Movie, MovieChange]:
     """Insert or update one movie. The change tells the caller whether it is a "new release".
 
     A new release is a row inserted as `now_showing`, or a `coming_soon` row that becomes
-    `now_showing`. A title seen on both pages stays `now_showing` (never downgraded).
+    `now_showing`. A title seen on both pages stays `now_showing` (never downgraded). Every
+    call refreshes `last_seen_at`. `released_at` is set on a new release unless `mark_release`
+    is False (the baseline scrape, so the first run never alerts).
     """
     row = await session.scalar(
         select(tables.Movie).where(
@@ -54,6 +65,8 @@ async def upsert_movie(
             normalized_title=normalize_title(listing.title),
             url=listing.url,
             status=listing.status,
+            last_seen_at=func.now(),
+            released_at=func.now() if mark_release and listing.status == "now_showing" else None,
         )
         session.add(row)
         await session.flush()
@@ -64,22 +77,80 @@ async def upsert_movie(
     if row.status == "coming_soon" and listing.status == "now_showing":
         row.status = "now_showing"
         change = "status_changed"
+        if mark_release:
+            row.released_at = func.now()
     row.title = listing.title
     row.normalized_title = normalize_title(listing.title)
     row.url = listing.url
+    row.last_seen_at = func.now()
     await session.flush()
     await session.refresh(row)
     return Movie.model_validate(row), change
 
 
 async def list_for_city(
-    session: AsyncSession, city_id: int, *, status: MovieStatus | None = None
+    session: AsyncSession,
+    city_id: int,
+    *,
+    status: MovieStatus | None = None,
+    current_only: bool = False,
 ) -> list[Movie]:
+    """Movies in a city. `current_only` keeps those seen on a good scrape in the last 2 days,
+    so a movie that left theatres is not offered or matched by a new watch."""
     stmt = select(tables.Movie).where(tables.Movie.city_id == city_id)
     if status is not None:
         stmt = stmt.where(tables.Movie.status == status)
+    if current_only:
+        stmt = stmt.where(tables.Movie.last_seen_at >= func.now() - LISTED_WINDOW)
     rows = await session.scalars(stmt.order_by(tables.Movie.id))
     return [Movie.model_validate(r) for r in rows]
+
+
+async def unalerted_releases(
+    session: AsyncSession, chain_id: int, city_id: int, since: datetime
+) -> list[tuple[User, Movie]]:
+    """New-release alerts still owed for one chain: (user, movie) pairs with no delivered alert.
+
+    Deciding an alert and delivering it are separate steps and Telegram can refuse a message,
+    so this is how an undelivered alert is found again. Only movies that went on sale since
+    `since`; only users who existed at that moment; and not users who watch that movie (they get
+    the watch alert instead).
+    """
+    alert_key = literal("new_release:") + cast(tables.Movie.id, Text)
+    watching = (
+        select(tables.WatchItem.id)
+        .where(
+            tables.WatchItem.user_id == tables.User.id, tables.WatchItem.movie_id == tables.Movie.id
+        )
+        .exists()
+    )
+    rows = await session.execute(
+        select(tables.User, tables.Movie)
+        .join(
+            tables.Movie,
+            and_(
+                tables.Movie.chain_id == chain_id,
+                tables.Movie.city_id == tables.User.current_city_id,
+                tables.Movie.released_at.is_not(None),
+                tables.Movie.released_at >= since,
+                tables.Movie.released_at >= tables.User.created_at,
+                tables.Movie.status == "now_showing",
+                tables.Movie.last_seen_at >= func.now() - LISTED_WINDOW,
+            ),
+        )
+        .outerjoin(
+            tables.Alert,
+            and_(tables.Alert.user_id == tables.User.id, tables.Alert.dedupe_key == alert_key),
+        )
+        .where(
+            tables.User.status == "approved",
+            tables.User.current_city_id == city_id,
+            tables.Alert.id.is_(None),
+            ~watching,
+        )
+        .order_by(tables.Movie.id, tables.User.id)
+    )
+    return [(User.model_validate(u), Movie.model_validate(m)) for u, m in rows.all()]
 
 
 async def upsert_showtimes(
@@ -119,7 +190,11 @@ async def list_showtimes(
     *,
     starts_from: datetime | None = None,
     starts_before: datetime | None = None,
+    fresh_within: timedelta | None = None,
 ) -> list[Showtime]:
+    """Stored sessions for a movie at a theatre. `fresh_within` keeps only sessions a lookup
+    returned recently (judged by the database clock that stamped `updated_at`), so sessions the
+    chain stopped returning are left out."""
     stmt = select(tables.Showtime).where(
         tables.Showtime.movie_id == movie_id, tables.Showtime.theatre_id == theatre_id
     )
@@ -127,6 +202,8 @@ async def list_showtimes(
         stmt = stmt.where(tables.Showtime.starts_at >= starts_from)
     if starts_before is not None:
         stmt = stmt.where(tables.Showtime.starts_at < starts_before)
+    if fresh_within is not None:
+        stmt = stmt.where(tables.Showtime.updated_at >= func.now() - fresh_within)
     rows = await session.scalars(stmt.order_by(tables.Showtime.starts_at, tables.Showtime.id))
     return [Showtime.model_validate(r) for r in rows]
 

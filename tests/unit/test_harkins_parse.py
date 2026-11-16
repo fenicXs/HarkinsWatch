@@ -202,3 +202,26 @@ async def test_the_legacy_generated_class_still_finds_the_format(page: Page) -> 
     await page.set_content(_page_with_sessions(group))
     (showtime,) = await extract_showtimes(page, "16", DAY)
     assert showtime.format == "3D"
+
+
+def test_a_show_after_midnight_starts_on_the_next_calendar_day() -> None:
+    start = parse_time("12:05 AM", DAY)
+    assert (start.day, start.hour, start.minute) == (18, 0, 5)  # Tuesday's page, Wednesday 00:05
+    assert parse_time("3:59 AM", DAY).day == 18
+    assert parse_time("4:00 AM", DAY).day == 17  # a morning show is the page's own day
+    assert parse_time("11:59 PM", DAY).day == 17
+
+
+def test_a_label_with_extra_text_still_yields_its_time() -> None:
+    assert parse_time("7:05 PM  (Open Caption)", DAY).hour == 19
+
+
+def test_a_label_with_no_time_is_an_error() -> None:
+    with pytest.raises(ValueError, match="no time"):
+        parse_time("Sold out", DAY)
+
+
+@pytest.mark.browser
+async def test_one_unreadable_label_does_not_lose_the_rest_of_the_page(page: Page) -> None:
+    await page.set_content(_page_with_sessions(_link("1", "Sold out"), _link("2", "7:05 PM")))
+    assert [s.external_session_id for s in await extract_showtimes(page, "16", DAY)] == ["2"]

@@ -5,6 +5,7 @@ from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 
+from showwatch.bot import keyboards
 from showwatch.bot.handlers import Env, Sender, search
 from showwatch.db import queue
 from showwatch.db.repositories import catalog, movies
@@ -16,6 +17,8 @@ from workerfakes import FakeChain, approved_user, listing, showtime
 # 02:00 UTC on the 17th is 19:00 on the 16th in Phoenix: "today" there is Nov 16.
 CLOCK = datetime(2026, 11, 17, 2, 0, tzinfo=UTC)
 DAY = date(2026, 11, 17)
+# The test sessions start at 13:00-22:00 Phoenix time on the 17th; look them up the evening before.
+LOOKUP_TIME = datetime(2026, 11, 17, 3, 0, tzinfo=UTC)
 
 
 def _sender(telegram_user_id: int) -> Sender:
@@ -158,26 +161,26 @@ async def test_several_screen_types_ask_which_first_and_the_tap_shows_that_forma
 
     assert notifier.to(1) == ["Pick a screen type:"]
     assert notifier.buttons_to(1) == [
-        ("Digital", f"fmt:{movie.id}:2026-11-17:0"),
-        ("IMAX", f"fmt:{movie.id}:2026-11-17:1"),
+        ("Digital", f"fmt:{movie.id}:2026-11-17:{keyboards.format_code('Digital')}"),
+        ("IMAX", f"fmt:{movie.id}:2026-11-17:{keyboards.format_code('IMAX')}"),
     ]
 
     notifier.sent.clear()
-    bot_env = Env(worker_env.session_factory, notifier, 1000)
-    await search.handle_format(bot_env, _sender(1), movie.id, DAY, 1)  # IMAX
+    bot_env = Env(worker_env.session_factory, notifier, 1000, clock=lambda: LOOKUP_TIME)
+    await search.handle_format(bot_env, _sender(1), movie.id, DAY, keyboards.format_code("IMAX"))
     assert [label for label, _ in notifier.buttons_to(1)] == ["4:00 PM"]
     notifier.sent.clear()
-    await search.handle_format(bot_env, _sender(1), movie.id, DAY, 0)  # Digital
+    await search.handle_format(bot_env, _sender(1), movie.id, DAY, keyboards.format_code("Digital"))
     assert [label for label, _ in notifier.buttons_to(1)] == ["1:00 PM", "7:00 PM"]
 
 
-async def test_a_format_index_that_no_longer_exists_asks_for_the_date_again(
+async def test_a_format_that_is_not_offered_asks_for_the_date_again(
     env: Env, notifier: FakeNotifier
 ) -> None:
     await approved_user(env.session_factory, 1)
     movie = await _movie(env)
-    await search.handle_format(env, _sender(1), movie.id, DAY, 3)
-    await search.handle_format(env, _sender(1), 999_999, DAY, 0)
+    await search.handle_format(env, _sender(1), movie.id, DAY, "deadbeef")
+    await search.handle_format(env, _sender(1), 999_999, DAY, "deadbeef")
     assert notifier.to(1) == [
         "Those showtimes changed. Pick the date again.",
         "That movie is no longer available.",
@@ -232,3 +235,108 @@ async def test_the_lookup_is_skipped_for_a_movie_that_is_gone(
         await session.execute(text("delete from movies"))
     assert await search_showtimes.run(worker_env, job) == {"skipped": True}
     assert notifier.sent == []
+
+
+async def test_a_cancelled_or_started_session_never_shows_after_a_format_tap(
+    worker_env: WorkerEnv, chain: FakeChain, notifier: FakeNotifier
+) -> None:
+    """The format list the user tapped and the times shown must come from the same sessions."""
+    user = await approved_user(worker_env.session_factory, 1)
+    movie = await _movie(worker_env)
+    chain.showtimes = [
+        showtime("1", 13, "Digital"),
+        showtime("2", 16, "IMAX"),
+        showtime("3", 19, "Digital"),
+    ]
+    await search_showtimes.run(worker_env, await _job(worker_env, user.id, movie))
+
+    # Session 1 is cancelled: the chain stops returning it, but its old row stays in the table.
+    chain.showtimes = [showtime("2", 16, "IMAX"), showtime("3", 19, "Digital")]
+    await search_showtimes.run(worker_env, await _job(worker_env, user.id, movie))
+    async with worker_env.session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "update showtimes set updated_at = updated_at - interval '2 hours' where external_session_id = '1'"
+            )
+        )
+    notifier.sent.clear()
+
+    bot_env = Env(worker_env.session_factory, notifier, 1000, clock=lambda: LOOKUP_TIME)
+    await search.handle_format(bot_env, _sender(1), movie.id, DAY, keyboards.format_code("Digital"))
+    assert [label for label, _ in notifier.buttons_to(1)] == [
+        "7:00 PM"
+    ]  # not the cancelled 1:00 PM
+
+    # Once the 7 PM show has started, it is not offered either.
+    notifier.sent.clear()
+    late = Env(
+        worker_env.session_factory,
+        notifier,
+        1000,
+        clock=lambda: datetime(2026, 11, 18, 3, 30, tzinfo=UTC),
+    )
+    await search.handle_format(late, _sender(1), movie.id, DAY, keyboards.format_code("Digital"))
+    assert notifier.to(1) == ["Those showtimes changed. Pick the date again."]
+
+
+async def test_the_same_date_tapped_twice_queues_one_lookup(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    await approved_user(env.session_factory, 1)
+    movie = await _movie(env)
+    await search.handle_date(clocked, _sender(1), movie.id, DAY)
+    await search.handle_date(clocked, _sender(1), movie.id, DAY)
+    assert notifier.to(1) == ["Looking up showtimes…", "Already looking that up…"]
+    async with env.session_factory() as session:
+        assert (await session.scalar(text("select count(*) from jobs"))) == 1
+
+
+async def test_a_user_cannot_pile_up_lookups(env: Env, notifier: FakeNotifier) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    await approved_user(env.session_factory, 1)
+    movie = await _movie(env)
+    for day in range(16, 21):  # five different dates
+        await search.handle_date(clocked, _sender(1), movie.id, date(2026, 11, day))
+    assert notifier.to(1)[:3] == ["Looking up showtimes…"] * 3
+    assert notifier.to(1)[3:] == ["Still looking things up. Try again in a moment."] * 2
+    async with env.session_factory() as session:
+        assert (await session.scalar(text("select count(*) from jobs"))) == search.MAX_OPEN_SEARCHES
+
+
+async def test_another_users_lookups_do_not_count_against_you(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    await approved_user(env.session_factory, 1)
+    await approved_user(env.session_factory, 2)
+    movie = await _movie(env)
+    for day in range(16, 19):
+        await search.handle_date(clocked, _sender(1), movie.id, date(2026, 11, day))
+    await search.handle_date(clocked, _sender(2), movie.id, DAY)
+    assert notifier.to(2) == ["Looking up showtimes…"]
+
+
+async def test_a_lookup_for_a_user_who_changed_city_is_skipped(
+    worker_env: WorkerEnv, chain: FakeChain, notifier: FakeNotifier
+) -> None:
+    user = await approved_user(worker_env.session_factory, 1, city="blr")  # moved to Bangalore
+    movie = await _movie(worker_env)  # a Phoenix movie
+    chain.showtimes = [showtime("1", 13)]
+    assert await search_showtimes.run(worker_env, await _job(worker_env, user.id, movie)) == {
+        "skipped": True
+    }
+    assert chain.showtime_calls == []
+
+
+async def test_a_busy_theatre_site_tells_the_user_instead_of_retrying_forever(
+    worker_env: WorkerEnv, chain: FakeChain, notifier: FakeNotifier
+) -> None:
+    from showwatch.chains.base import BlockedError
+
+    user = await approved_user(worker_env.session_factory, 1)
+    movie = await _movie(worker_env)
+    chain.error = BlockedError("backing off")
+    result = await search_showtimes.run(worker_env, await _job(worker_env, user.id, movie))
+    assert result == {"blocked": True}
+    assert notifier.to(1) == ["The theatre site is busy right now. Try again in a few minutes."]

@@ -105,6 +105,12 @@ class Movie(_Common, Base):
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # When this movie last appeared on a good scrape, and when it went on sale (None for the
+    # baseline scrape, so the first run never alerts).
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Showtime(_Common, Base):

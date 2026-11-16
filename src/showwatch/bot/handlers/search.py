@@ -19,6 +19,8 @@ from showwatch.domain.models import Movie, Showtime, User
 from showwatch.notify import Buttons
 
 DAYS_OFFERED = 7
+FRESH_WINDOW = timedelta(minutes=30)  # how long a lookup's sessions count as current
+MAX_OPEN_SEARCHES = 3  # per user, so tapping dates cannot flood the worker with browser jobs
 NO_SHOWTIMES = "No showtimes at {theatre} that day."
 
 
@@ -102,18 +104,28 @@ async def handle_date(env: Env, sender: Sender, movie_id: int, day: date) -> Non
             if not today <= day < today + timedelta(days=DAYS_OFFERED):
                 text = "That date is out of range. Tap a date from the list."
             else:
-                await queue.enqueue(
-                    session,
-                    "search_showtimes",
-                    {"user_id": user.id, "movie_id": movie.id, "day": day.isoformat()},
-                    chain_id=movie.chain_id,
-                )
-                text = "Looking up showtimes…"
+                payload = {"user_id": user.id, "movie_id": movie.id, "day": day.isoformat()}
+                open_jobs = await queue.open_payloads_for_user(session, "search_showtimes", user.id)
+                if payload in open_jobs:
+                    text = "Already looking that up…"
+                elif len(open_jobs) >= MAX_OPEN_SEARCHES:
+                    text = "Still looking things up. Try again in a moment."
+                else:
+                    await queue.enqueue(
+                        session, "search_showtimes", payload, chain_id=movie.chain_id
+                    )
+                    text = "Looking up showtimes…"
     await env.notifier.send(sender.chat_id, text)
 
 
-async def handle_format(env: Env, sender: Sender, movie_id: int, day: date, index: int) -> None:
-    """A screen type was tapped: show that format's times from the stored sessions."""
+async def handle_format(env: Env, sender: Sender, movie_id: int, day: date, code: str) -> None:
+    """A screen type was tapped: show that format's times from the sessions looked up just now.
+
+    Only sessions refreshed in the last 30 minutes that have not started count, the same set
+    the worker offered, so a cancelled or started session never shows up and the format code
+    always means the format the user tapped.
+    """
+    now = env.clock()
     async with env.session_factory() as session:
         found = await _context(session, sender, movie_id)
         if found is None:
@@ -127,14 +139,18 @@ async def handle_format(env: Env, sender: Sender, movie_id: int, day: date, inde
                 s
                 for theatre in theatres
                 for s in await movies.list_showtimes(
-                    session, movie.id, theatre.id, starts_from=start, starts_before=end
+                    session,
+                    movie.id,
+                    theatre.id,
+                    starts_from=max(start, now),
+                    starts_before=end,
+                    fresh_within=FRESH_WINDOW,
                 )
             ]
-            formats = formats_of(stored)
-            if not 0 <= index < len(formats):
+            chosen = [s for s in stored if keyboards.format_code(s.format) == code]
+            if not chosen:
                 text, buttons = "Those showtimes changed. Pick the date again.", None
             else:
-                chosen = [s for s in stored if s.format == formats[index]]
                 text = "Tap a showtime to book 2 seats:"
                 buttons = keyboards.time_choices(
                     [(s.id, time_label(s.starts_at, tz_name)) for s in chosen]

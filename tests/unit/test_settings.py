@@ -65,3 +65,22 @@ def test_require_bot_returns_token_and_admin(monkeypatch: pytest.MonkeyPatch) ->
     token, admin = Settings(_env_file=None).require_bot()  # type: ignore[call-arg]
     assert token.get_secret_value() == "123:abc"
     assert admin == 42
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("CHAIN_REQUEST_BUDGET_PER_MIN", "0"),  # would divide by zero
+        ("CHECK_INTERVAL_S", "5"),  # would hammer the sites
+        ("POLL_JITTER_PCT", "150"),
+        ("JOB_LOCK_TIMEOUT_S", "0"),
+    ],
+)
+def test_nonsense_scheduling_values_are_refused(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)  # type: ignore[call-arg]

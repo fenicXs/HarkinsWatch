@@ -322,7 +322,7 @@ Done when: using the new bot (its own token, C2) while the legacy bot is also ru
 1. A watched title becoming Now Showing sends an alert with a "Book seats" button, callback `pick:<movie_id>`; the same callback follows a `/watch` match for a title that is already playing.
 2. `pick:` sends 7 date buttons, `date:<movie_id>:<YYYY-MM-DD>`, starting from today's date in the city's time zone.
 3. `date:` enqueues a `search_showtimes` job and replies "Looking up showtimes…".
-4. The handler calls `chain.list_showtimes`, stores rows in `showtimes`, then sends format buttons `fmt:<movie_id>:<day>:<n>` (only when more than one format exists; `n` is the position in the alphabetical list of distinct formats for that movie and day, re-read on the tap) or time buttons `book:<showtime_id>` labelled with the showtime text. An empty result replies "No showtimes at Arizona Mills that day."
+4. The handler calls `chain.list_showtimes`, stores rows in `showtimes`, then sends format buttons `fmt:<movie_id>:<day>:<code>` (only when more than one format exists; `<code>` is the first 8 hex characters of the SHA-1 of the format name, so it never depends on list order; a tap shows that format's sessions that a lookup returned in the last 30 minutes and that have not started) or time buttons `book:<showtime_id>` labelled with the showtime text. An empty result replies "No showtimes at Arizona Mills that day."
 
 Tests: the fixture parse returns the expected titles, times and formats; a suspect snapshot sends no alert; a duplicate alert is suppressed by `dedupe_key`; the first check sends no alerts; jitter stays within ±20%; every callback string built by `keyboards.py` is at most 64 bytes; the request budget blocks the 11th request in a minute; a 429 sets `blocked_until`.
 
@@ -333,6 +333,11 @@ Tests: the fixture parse returns the expected titles, times and formats; a suspe
 - A watch attaches to a listed movie only on a clear match (`match_for_watch`: one substring match, or a title equal to the query); close spellings never attach.
 - `/watch` on an already-playing movie, and the "Book seats" button, go to the date picker; `book:` taps answer "Booking arrives in a later update" until M4.
 - `worker/handlers/__init__.py` holds `WorkerEnv`; the worker no longer uses `core/lifecycle.py` (deleted); `tzdata` is a pinned dependency because Windows has no time-zone database; `probe_signals` scheduling waits for the first chain with SIGNALS (M5); `HarkinsChain.capabilities` is WATCH | SHOWTIMES until M4 adds BOOK.
+- **New-release alerts are durable too** (migration `0002`: `movies.last_seen_at`, `movies.released_at`): they are derived from stored state, for movies that went on sale in the last 48 hours, to approved users in the city who existed at that time, who are not watching that movie, and who have no delivered alert. A refused send is retried on the next check, and a user approved later is not sent old alerts.
+- Only movies seen on a good scrape in the last 2 days are offered by `/watch` or matched by a watch, and a watch attaches only to movies of the chain being scraped, so a movie that left theatres cannot fire a false "now playing".
+- Back-off resets only after a scrape that actually found movies; an HTTP error page (404/500) fails the job and retries, and is neither "blocked" nor clean.
+- Search guards: the same date tapped twice queues one lookup; a user has at most 3 open lookups; a lookup for a user who changed city is skipped; a blocked site tells the user to retry in a few minutes instead of retrying forever. Show times before 4 AM belong to the previous day's page and start the next calendar day; an unreadable time label skips that session, not the page. Scheduling settings are validated (a zero request budget, for example, is refused).
+- Known limit: a search scrapes only the first theatre of a city (one Harkins theatre is seeded today); more theatres need a loop and theatre names on the buttons.
 - The parity check (`scripts/parity_check.py`) found the new and legacy sides identical on the real captured page: 2 new releases and 1 watch fire. A user who is both watching a title and subscribed gets one message on the new side where legacy sent two (deliberate).
 
 Done when (parity test):
@@ -440,7 +445,7 @@ Every table: `id bigint identity primary key`, `created_at timestamptz not null 
 | `cities` | `code`, `name`, `tz` | unique `code` |
 | `chains` | `code`, `enabled bool default false`, `blocked_until null` | unique `code` |
 | `theatres` | `chain_id`, `city_id`, `external_id`, `name` | unique `(chain_id, external_id)` |
-| `movies` | `chain_id`, `city_id`, `external_id`, `title`, `normalized_title`, `url`, `status`, `first_seen_at default now()` | unique `(chain_id, city_id, external_id)`; `status` in `now_showing|coming_soon`; `normalized_title` = `casefold()`, punctuation removed, whitespace collapsed |
+| `movies` | `chain_id`, `city_id`, `external_id`, `title`, `normalized_title`, `url`, `status`, `first_seen_at default now()`, `last_seen_at default now()` (refreshed on every good scrape), `released_at null` (when it went on sale; null for the baseline scrape; migration `0002`) | unique `(chain_id, city_id, external_id)`; `status` in `now_showing|coming_soon`; `normalized_title` = `casefold()`, punctuation removed, whitespace collapsed |
 | `showtimes` | `movie_id`, `theatre_id`, `external_session_id`, `starts_at`, `format default 'Standard'`, `booking_url`, `first_seen_at default now()` | unique `(theatre_id, external_session_id)` |
 | `watch_items` | `user_id`, `city_id`, `query`, `movie_id` null, `stage default 'waiting'`, `fast_until null`, `format_pref null` | unique `(user_id, city_id, query)`; `stage` in `waiting|listed|dates|venues|sessions|done` |
 | `signals` | `watch_item_id`, `stage`, `evidence jsonb`, `seen_at default now()` | unique `(watch_item_id, stage)` |

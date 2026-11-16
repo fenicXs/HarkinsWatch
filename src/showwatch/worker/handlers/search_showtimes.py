@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from showwatch.bot.handlers import search
+from showwatch.chains.base import BlockedError
 from showwatch.db.repositories import catalog, movies, users
 from showwatch.domain.models import Capability, Job
 from showwatch.worker.handlers import WorkerEnv
@@ -23,15 +24,24 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
         )
     if user is None or user.status != "approved" or movie is None or city is None or chain is None:
         return {"skipped": True}
+    if user.current_city_id != movie.city_id:  # the user moved on since tapping the date
+        return {"skipped": True}
     chat_id = user.chat_id or user.telegram_user_id
     if not theatres:
         await env.notifier.send(chat_id, "No theatre is set up for that movie yet.")
         return {"skipped": True}
 
     theatre = theatres[0]
-    listings = await env.registry.require(chain.code, Capability.SHOWTIMES).list_showtimes(
-        movie, theatre, day
-    )
+    try:
+        listings = await env.registry.require(chain.code, Capability.SHOWTIMES).list_showtimes(
+            movie, theatre, day
+        )
+    except BlockedError:
+        # The site asked us to slow down. Tell the user instead of retrying a button tap forever.
+        await env.notifier.send(
+            chat_id, "The theatre site is busy right now. Try again in a few minutes."
+        )
+        return {"blocked": True}
     async with env.session_factory() as session, session.begin():
         await movies.upsert_showtimes(session, movie.id, theatre.id, listings)
         start, end = search.day_bounds(day, city.tz)

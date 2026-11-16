@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,12 +22,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # Scheduling
-    check_interval_s: int = 1800
-    fast_interval_s: int = 60
-    fast_window_h: int = 72
-    poll_jitter_pct: int = 20
-    job_lock_timeout_s: int = 900
-    chain_request_budget_per_min: int = 10
+    check_interval_s: int = Field(default=1800, ge=60)
+    fast_interval_s: int = Field(default=60, ge=10)
+    fast_window_h: int = Field(default=72, ge=1)
+    poll_jitter_pct: int = Field(default=20, ge=0, le=90)
+    job_lock_timeout_s: int = Field(default=900, ge=60)
+    chain_request_budget_per_min: int = Field(default=10, ge=1)
 
     # LLM: seat-map vision (primary and one fallback)
     llm_vision_base_url: str | None = None

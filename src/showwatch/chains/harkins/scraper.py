@@ -8,7 +8,7 @@ skipped; the format defaults to "Standard".
 """
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -65,6 +65,8 @@ FORMAT_JS = """el => {
 }"""
 
 _SESSION_ID = re.compile(r"/session/(\d+)")
+_CLOCK = re.compile(r"(\d{1,2}:\d{2})\s*([AP]M)")
+AFTER_MIDNIGHT_UNTIL_HOUR = 4
 _THEATRE_ID = re.compile(r"/ticketing/theatre/(\d+)/")
 
 log = structlog.get_logger(__name__)
@@ -91,9 +93,17 @@ def merge_listings(
 
 
 def parse_time(text: str, day: date) -> datetime:
-    """'4:20 PM' on `day`, in the theatre's time zone, as an aware datetime."""
-    clock = datetime.strptime(text.strip().upper(), "%I:%M %p")
-    return datetime.combine(day, clock.time(), tzinfo=SITE_TZ)
+    """'4:20 PM' on `day`, in the theatre's time zone, as an aware datetime.
+
+    A show before 4 AM belongs to the night of the page's day, so it starts on the next
+    calendar day ("12:05 AM" under Friday is Saturday 00:05).
+    """
+    found = _CLOCK.search(text.upper())
+    if found is None:
+        raise ValueError(f"no time in {text!r}")
+    clock = datetime.strptime(f"{found.group(1)} {found.group(2)}", "%I:%M %p")
+    start = datetime.combine(day, clock.time(), tzinfo=SITE_TZ)
+    return start + timedelta(days=1) if clock.hour < AFTER_MIDNIGHT_UNTIL_HOUR else start
 
 
 async def extract_movie_links(page: Page) -> list[tuple[str, str]]:
@@ -125,12 +135,17 @@ async def extract_showtimes(
         if session is None:
             continue
         label = (await anchor.inner_text()).strip()
+        try:
+            starts_at = parse_time(label, day)
+        except ValueError:
+            log.warning("showtime_label_unreadable", label=label, href=href)
+            continue  # one odd label must not lose the whole page
         fmt = (await anchor.evaluate(FORMAT_JS)) or "Standard"
         showtimes.append(
             ShowtimeListing(
                 external_session_id=session.group(1),
                 theatre_external_id=theatre_external_id,
-                starts_at=parse_time(label, day),
+                starts_at=starts_at,
                 format=fmt,
                 booking_url=urljoin(BASE_URL, href),
             )
@@ -155,7 +170,10 @@ class HarkinsChain(BaseChain):
                 coming_soon = await self._movies_on(browser, COMING_SOON_URL, "coming_soon")
             finally:
                 await browser.close()
-        return merge_listings(now_showing, coming_soon)
+        merged = merge_listings(now_showing, coming_soon)
+        if merged:  # an empty result may be an unrecognised block page: do not call it clean
+            await self._politeness.record_ok(self.code)
+        return merged
 
     async def list_showtimes(
         self, movie: Movie, theatre: Theatre, day: date
@@ -191,9 +209,11 @@ class HarkinsChain(BaseChain):
             raise BlockedError(
                 f"harkins.com stopped us (status {status}); backing off until {until}"
             )
+        if status is not None and status >= 400:
+            # An error page is neither "blocked" (back off) nor clean: let the job fail and retry.
+            raise RuntimeError(f"harkins.com returned HTTP {status} for {url}")
         try:
             await page.wait_for_selector(ready_selector, timeout=timeout_ms)
         except Exception:
             log.info("page_has_no_matching_content", url=url, selector=ready_selector)
-        await self._politeness.record_ok(self.code)
         return page

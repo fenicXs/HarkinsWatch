@@ -156,13 +156,13 @@ async def _date_button(env: Env, sender: Sender, ref: str) -> None:
 
 
 async def _format_button(env: Env, sender: Sender, ref: str) -> None:
-    """`fmt:<movie_id>:<YYYY-MM-DD>:<n>`"""
-    parts = ref.split(":")
-    if len(parts) != 3 or not all(p.isascii() and p.isdigit() for p in (parts[0], parts[2])):
-        return
-    day = _parse_day(parts[1])
-    if day is not None:
-        await search.handle_format(env, sender, int(parts[0]), day, int(parts[2]))
+    """`fmt:<movie_id>:<YYYY-MM-DD>:<format code>`"""
+    movie_id, _, rest = ref.partition(":")
+    day_text, _, code = rest.partition(":")
+    day = _parse_day(day_text)
+    valid_code = len(code) == 8 and all(c in "0123456789abcdef" for c in code)
+    if movie_id.isascii() and movie_id.isdigit() and day is not None and valid_code:
+        await search.handle_format(env, sender, int(movie_id), day, code)
 
 
 async def on_startup(application: App) -> None:

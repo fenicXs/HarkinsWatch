@@ -323,7 +323,9 @@ async def test_the_search_buttons_are_routed_to_the_search_handlers(
     await _feed(application, callback_update(2, ADMIN_ID, f"date:{movie.id}:{today}", name="Root"))
     assert bot.to(ADMIN_ID)[-1] == "Looking up showtimes…"
 
-    await _feed(application, callback_update(3, ADMIN_ID, f"fmt:{movie.id}:{today}:0", name="Root"))
+    await _feed(
+        application, callback_update(3, ADMIN_ID, f"fmt:{movie.id}:{today}:deadbeef", name="Root")
+    )
     assert bot.to(ADMIN_ID)[-1] == "Those showtimes changed. Pick the date again."
 
     await _feed(application, callback_update(4, ADMIN_ID, "book:5", name="Root"))
@@ -338,6 +340,9 @@ async def test_the_search_buttons_are_routed_to_the_search_handlers(
         "date:5",
         "fmt:5:2026-11-17",
         "fmt:5:bad:0",
+        "fmt:5:2026-11-17:0",
+        "fmt:5:2026-11-17:ZZZZZZZZ",
+        "fmt:5:2026-11-17:abc",
         "fmt:x:2026-11-17:0",
         "pick:x",
         "book:\u0663",

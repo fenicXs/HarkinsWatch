@@ -98,6 +98,20 @@ async def has_open_job(
     return bool(await session.scalar(stmt))
 
 
+async def open_payloads_for_user(
+    session: AsyncSession, kind: str, user_id: int
+) -> list[dict[str, Any]]:
+    """Payloads of this user's queued or running jobs of one kind (to avoid duplicates)."""
+    rows = await session.scalars(
+        select(tables.Job.payload).where(
+            tables.Job.kind == kind,
+            tables.Job.status.in_(("queued", "running")),
+            tables.Job.payload["user_id"].as_integer() == user_id,
+        )
+    )
+    return list(rows)
+
+
 async def last_finished_at(
     session: AsyncSession, kind: str, *, chain_id: int, city_id: int
 ) -> datetime | None:

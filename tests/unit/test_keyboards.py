@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -18,6 +18,8 @@ def _movie(movie_id: int, title: str) -> Movie:
         url="u",
         status="coming_soon",
         first_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+        released_at=None,
     )
 
 
@@ -82,3 +84,16 @@ def test_none_of_these_button_carries_the_typed_words() -> None:
 def test_none_of_these_button_is_left_out_when_the_words_do_not_fit() -> None:
     assert keyboards.watch_for("x" * 60) is None  # "watchfor:" + 60 is over 64 bytes
     assert keyboards.watch_for("é" * 30) is None  # 60 bytes of text plus the prefix
+
+
+def test_a_format_code_is_short_stable_and_different_per_format() -> None:
+    assert keyboards.format_code("IMAX") == keyboards.format_code("IMAX")
+    assert keyboards.format_code("IMAX") != keyboards.format_code("Digital")
+    assert len(keyboards.format_code("CINÉ XL")) == 8
+
+
+def test_format_buttons_use_the_code_so_a_long_name_still_fits() -> None:
+    long_name = "Dolby Cinema at Harkins with Reclining Seats " * 3
+    (row,) = keyboards.format_choices(7, date(2026, 11, 17), [long_name])
+    assert row[0].data == f"fmt:7:2026-11-17:{keyboards.format_code(long_name)}"
+    assert len(row[0].data.encode()) <= CALLBACK_DATA_MAX_BYTES

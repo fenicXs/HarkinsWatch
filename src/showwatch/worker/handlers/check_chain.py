@@ -33,6 +33,9 @@ from showwatch.domain.title_match import match_for_watch
 from showwatch.notify import Buttons
 from showwatch.worker.handlers import WorkerEnv
 
+# How long after a movie goes on sale a refused new-release alert is still retried.
+NEW_RELEASE_WINDOW = timedelta(hours=48)
+
 log = structlog.get_logger(__name__)
 
 
@@ -67,15 +70,16 @@ def _chat_id(user: User) -> int:
 
 
 async def _advance_watches(
-    session: Any, env: WorkerEnv, city: City, now: datetime
+    session: Any, env: WorkerEnv, chain_id: int, city: City, now: datetime
 ) -> list[WatchEvent]:
     """Attach unmatched watches to listed movies, then move matched ones along their stages."""
-    city_movies = await movies.list_for_city(session, city.id)
-    titles = [m.title for m in city_movies]
+    city_movies = await movies.list_for_city(session, city.id, current_only=True)
+    this_chain = [m for m in city_movies if m.chain_id == chain_id]  # attach within this chain
+    titles = [m.title for m in this_chain]
     for item in await watches.list_unmatched(session, city.id):
         title = match_for_watch(item.query, titles)
         if title is not None:
-            movie = next(m for m in city_movies if m.title == title)
+            movie = next(m for m in this_chain if m.title == title)
             await watches.set_movie(session, item.id, movie.id)
 
     by_id = {m.id: m for m in city_movies}
@@ -137,20 +141,25 @@ async def process_scrape(
 
         released: list[Movie] = []
         for listing in listings:
-            movie, change = await movies.upsert_movie(session, chain.id, city.id, listing)
+            movie, change = await movies.upsert_movie(
+                session, chain.id, city.id, listing, mark_release=not first_run
+            )
             if movie.status == "now_showing" and change in ("inserted", "status_changed"):
                 released.append(movie)
 
-        events = await _advance_watches(session, env, city, now)
-        pending.extend(_watch_alert(chain_name, e) for e in events)
+        events = await _advance_watches(session, env, chain.id, city, now)
+        chain_names = {chain.id: chain_name}
+        for event in events:
+            if event.movie.chain_id not in chain_names:
+                owner = await catalog.get_chain(session, event.movie.chain_id)
+                chain_names[event.movie.chain_id] = owner.code.title() if owner else "the theatre"
+        pending.extend(_watch_alert(chain_names[e.movie.chain_id], e) for e in events)
 
-        if not first_run:
-            told_by_watch = {(e.user.id, e.movie.id) for e in events}
-            for user in await users.list_approved_in_city(session, city.id):
-                for movie in released:
-                    if (user.id, movie.id) not in told_by_watch:
-                        text = f"New at {chain_name}: {movie.title}\n{movie.url}"
-                        pending.append(_Alert(user, f"new_release:{movie.id}", text, None))
+        # New-release alerts owed, including any an earlier run decided but failed to deliver.
+        since = datetime.now(UTC) - NEW_RELEASE_WINDOW
+        for user, movie in await movies.unalerted_releases(session, chain.id, city.id, since):
+            text = f"New at {chain_name}: {movie.title}\n{movie.url}"
+            pending.append(_Alert(user, f"new_release:{movie.id}", text, None))
 
     sent = await _deliver(env, pending)
     return ScrapeResult(

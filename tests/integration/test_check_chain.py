@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from showwatch.db import queue
@@ -327,3 +328,94 @@ async def test_the_job_handler_rejects_an_unknown_city(
 
     with pytest.raises(LookupError):
         await check_chain.run(worker_env, job)
+
+
+async def test_a_new_release_alert_that_failed_to_send_is_delivered_on_a_later_scrape(
+    worker_env: WorkerEnv, notifier: FakeNotifier
+) -> None:
+    await approved_user(worker_env.session_factory, 1)
+    await _scrape(worker_env, many(5))
+    bigger = [*many(5), listing("new-film", title="New Film")]
+
+    notifier.unreachable.add(1)  # Telegram refuses it
+    await _scrape(worker_env, bigger)
+    assert notifier.sent == []
+
+    notifier.unreachable.clear()
+    await _scrape(
+        worker_env, bigger
+    )  # the movie is no longer "new" to the scrape, but the alert is owed
+    assert notifier.to(1) == ["New at Harkins: New Film\nhttps://www.harkins.com/movies/new-film"]
+    await _scrape(worker_env, bigger)
+    assert len(notifier.to(1)) == 1
+
+
+async def test_a_user_approved_after_a_release_is_not_sent_the_old_alert(
+    worker_env: WorkerEnv, notifier: FakeNotifier
+) -> None:
+    await approved_user(worker_env.session_factory, 1)
+    await _scrape(worker_env, many(5))
+    notifier.unreachable.add(1)
+    await _scrape(worker_env, [*many(5), listing("new-film")])  # released, but nothing delivered
+    late = await approved_user(worker_env.session_factory, 2)  # joins afterwards
+    notifier.unreachable.clear()
+
+    await _scrape(worker_env, [*many(5), listing("new-film")])
+
+    assert notifier.to(late.telegram_user_id) == []
+    assert len(notifier.to(1)) == 1
+
+
+async def test_the_baseline_scrape_never_creates_alerts_later(
+    worker_env: WorkerEnv, notifier: FakeNotifier
+) -> None:
+    await approved_user(worker_env.session_factory, 1)
+    await _scrape(worker_env, many(5))  # baseline: these are not "releases"
+    await _scrape(worker_env, many(5))
+    await approved_user(worker_env.session_factory, 2)
+    await _scrape(worker_env, many(5))
+    assert notifier.sent == []
+
+
+async def test_a_new_watch_does_not_attach_to_a_movie_that_left_theatres(
+    worker_env: WorkerEnv, notifier: FakeNotifier
+) -> None:
+    factory = worker_env.session_factory
+    user = await approved_user(factory, 1)
+    await _scrape(worker_env, [*many(5), listing("dune-2021", "now_showing", "Dune")])
+    async with factory() as session, session.begin():  # not seen on any scrape for 3 days
+        await session.execute(
+            text(
+                "update movies set last_seen_at = now() - interval '3 days' where external_id = 'dune-2021'"
+            )
+        )
+    watch_id = await add_watch(factory, user, "Dune")
+
+    await _scrape(worker_env, many(5))  # the old title is no longer listed
+
+    async with factory() as session:
+        item = await watches.get(session, watch_id)
+    assert item is not None
+    assert item.movie_id is None  # still waiting for a real release
+    assert notifier.sent == []
+
+
+async def test_a_watch_only_attaches_to_movies_of_the_chain_being_scraped(
+    worker_env: WorkerEnv, notifier: FakeNotifier
+) -> None:
+    factory = worker_env.session_factory
+    user = await approved_user(factory, 1)
+    watch_id = await add_watch(factory, user, "Dune")
+    async with factory() as session, session.begin():  # a movie of ANOTHER chain in Phoenix
+        bms = await catalog.get_chain_by_code(session, "bms")
+        phx = await catalog.get_city_by_code(session, "phx")
+        assert bms and phx
+        await movies.upsert_movie(session, bms.id, phx.id, listing("dune", "now_showing", "Dune"))
+
+    await _scrape(worker_env, many(5))  # the Harkins scrape does not list it
+
+    async with factory() as session:
+        item = await watches.get(session, watch_id)
+    assert item is not None
+    assert item.movie_id is None
+    assert notifier.sent == []

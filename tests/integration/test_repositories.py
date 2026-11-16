@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from showwatch.db.repositories import alerts, catalog, movies, signals, users, watches
@@ -322,3 +323,47 @@ async def test_list_pending_returns_only_users_still_waiting(session: AsyncSessi
     await users.set_status(session, approved.id, "approved")
     await users.set_status(session, denied.id, "denied")
     assert [u.id for u in await users.list_pending(session)] == [waiting.id]
+
+
+async def test_current_only_hides_movies_not_seen_for_two_days(session: AsyncSession) -> None:
+    phx, chain = await _phx(session), await _harkins(session)
+    await movies.upsert_movie(session, chain, phx, _listing("fresh"))
+    old, _ = await movies.upsert_movie(session, chain, phx, _listing("old"))
+    await session.execute(
+        text("update movies set last_seen_at = now() - interval '3 days' where id = :id"),
+        {"id": old.id},
+    )
+    assert [m.external_id for m in await movies.list_for_city(session, phx)] == ["fresh", "old"]
+    assert [m.external_id for m in await movies.list_for_city(session, phx, current_only=True)] == [
+        "fresh"
+    ]
+    await movies.upsert_movie(session, chain, phx, _listing("old"))  # seen again
+    assert len(await movies.list_for_city(session, phx, current_only=True)) == 2
+
+
+async def test_release_time_is_recorded_for_new_releases_but_not_for_a_baseline(
+    session: AsyncSession,
+) -> None:
+    phx, chain = await _phx(session), await _harkins(session)
+    baseline, _ = await movies.upsert_movie(session, chain, phx, _listing("a"), mark_release=False)
+    fresh, _ = await movies.upsert_movie(session, chain, phx, _listing("b"))
+    soon, _ = await movies.upsert_movie(session, chain, phx, _listing("c", "coming_soon"))
+    released, change = await movies.upsert_movie(session, chain, phx, _listing("c", "now_showing"))
+    assert baseline.released_at is None
+    assert fresh.released_at is not None
+    assert soon.released_at is None
+    assert (change, released.released_at is not None) == ("status_changed", True)
+
+
+async def test_open_search_payloads_belong_to_one_user_and_only_while_open(
+    session: AsyncSession,
+) -> None:
+    from showwatch.db import queue
+
+    first = await queue.enqueue(
+        session, "search_showtimes", {"user_id": 1, "movie_id": 5, "day": "d"}
+    )
+    await queue.enqueue(session, "search_showtimes", {"user_id": 2, "movie_id": 5, "day": "d"})
+    assert await queue.open_payloads_for_user(session, "search_showtimes", 1) == [first.payload]
+    await session.execute(text("update jobs set status = 'done' where id = :id"), {"id": first.id})
+    assert await queue.open_payloads_for_user(session, "search_showtimes", 1) == []
