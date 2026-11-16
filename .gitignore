@@ -9,6 +9,8 @@ legacy/.venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 seen_movies.json
 browser_profile/
 dump_*.html

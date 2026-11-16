@@ -54,4 +54,7 @@ RUN useradd --create-home --uid 10001 app \
     && mkdir /profiles \
     && chown app /profiles
 USER app
-CMD ["xvfb-run", "-a", "--server-args=-screen 0 1280x1024x24", "python", "-m", "showwatch.worker"]
+# Start a virtual display, then exec python so SIGTERM reaches it (xvfb-run would sit between
+# them and the worker's shutdown handler would never run).
+ENV DISPLAY=:99
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp & exec python -m showwatch.worker"]

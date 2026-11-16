@@ -17,7 +17,9 @@ services:
     volumes:
       - showwatch_pgdata:/var/lib/postgresql # the path Postgres 18 images expect
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U showwatch -d showwatch"]
+      # -h forces a TCP check: over the unix socket it can pass during the entrypoint's
+      # temporary init server, before Postgres accepts the connections `migrate` makes.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U showwatch -d showwatch"]
       interval: 5s
       timeout: 3s
       retries: 10

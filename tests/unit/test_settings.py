@@ -36,6 +36,19 @@ def test_unknown_env_keys_are_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     Settings(_env_file=None)  # type: ignore[call-arg]
 
 
+def test_blank_values_mean_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blank `KEY=` line (as shipped in .env.example) must not crash or become an empty string."""
+    _clear(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    monkeypatch.setenv("ADMIN_TELEGRAM_USER_ID", "")
+    monkeypatch.setenv("LLM_VISION_API_KEY", "")
+    monkeypatch.setenv("LLM_VISION_BASE_URL", "")
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.admin_telegram_user_id is None
+    assert s.llm_vision_api_key is None
+    assert s.llm_vision_base_url is None
+
+
 def test_require_bot_lists_missing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear(monkeypatch)
     monkeypatch.setenv("DATABASE_URL", DSN)

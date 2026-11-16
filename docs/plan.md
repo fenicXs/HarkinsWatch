@@ -211,7 +211,7 @@ Every other milestone lists its files as Path | Action (Create, Modify, Move, De
 
 **Logging.** Set the `httpx` and `httpcore` loggers to WARNING. The redaction processor matches keys case-insensitively and masks values of keys that equal or end with `token`, `secret`, `password` or `api_key` (whole-name match, so `dedupe_key` is untouched), and masks any string matching `bot\d+:[A-Za-z0-9_-]+`. Tests in `tests/unit/test_logging.py`, including keys named `Telegram_Token` and `API_KEY`.
 
-**Dockerfile.** Multi-stage, `uv sync --frozen --no-dev`, non-root user `app`, entrypoints `python -m showwatch.bot` and `python -m showwatch.worker`. `bot` target on `python:3.12-slim`. `worker` target on `mcr.microsoft.com/playwright/python:v<pinned Playwright version>-noble`, started under `xvfb-run` (headed Chromium), with `x11vnc` and noVNC installed for the `login` profile.
+**Dockerfile.** Multi-stage, `uv sync --frozen --no-dev`, non-root user `app`, entrypoints `python -m showwatch.bot` and `python -m showwatch.worker`. `bot` target on `python:3.12-slim`. `worker` target on `mcr.microsoft.com/playwright/python:v<pinned Playwright version>-noble`, starts Xvfb (`DISPLAY=:99`) and then execs python, so a headed Chromium works and SIGTERM reaches the worker (`xvfb-run` sits between the two and swallows it), with `x11vnc` and noVNC installed for the `login` profile.
 
 **Compose.**
 - `postgres`: `postgres:18-alpine`, `POSTGRES_USER=showwatch`, `POSTGRES_DB=showwatch`, `POSTGRES_PASSWORD` from `.env`, healthcheck `pg_isready -U showwatch -d showwatch`, host port 5433, volume `showwatch_pgdata` mounted at `/var/lib/postgresql` (the path Postgres 18 images expect).
@@ -223,7 +223,7 @@ Every other milestone lists its files as Path | Action (Create, Modify, Move, De
 
 Done when:
 - `docker compose up` shows `postgres` healthy, `migrate` exited 0, and `bot` and `worker` running and each having logged `ready`.
-- The `worker` container launches headed Chromium under `xvfb-run` and prints a page title (`docker compose run worker xvfb-run python -c "…"`).
+- The `worker` container launches headed Chromium on its Xvfb display and prints a page title (`docker compose exec worker python -c "…"`), and `docker compose stop` makes both `bot` and `worker` log `stopping`.
 - CI is green on the branch after a confirmed push.
 - `python -m compileall -q legacy` passes in the legacy venv (it runs no code).
 
