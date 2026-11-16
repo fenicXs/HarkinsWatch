@@ -307,3 +307,18 @@ async def test_each_signal_stage_is_stored_once(session: AsyncSession) -> None:
     assert not await signals.record(session, watch.id, "listed", {"page": "b"})
     assert await signals.record(session, watch.id, "dates", {"count": 3})
     assert await signals.stages_seen(session, watch.id) == ["listed", "dates"]
+
+
+async def test_list_pending_returns_only_users_still_waiting(session: AsyncSession) -> None:
+    waiting, _ = await users.create_pending(
+        session, telegram_user_id=1, chat_id=1, display_name=None
+    )
+    approved, _ = await users.create_pending(
+        session, telegram_user_id=2, chat_id=2, display_name=None
+    )
+    denied, _ = await users.create_pending(
+        session, telegram_user_id=3, chat_id=3, display_name=None
+    )
+    await users.set_status(session, approved.id, "approved")
+    await users.set_status(session, denied.id, "denied")
+    assert [u.id for u in await users.list_pending(session)] == [waiting.id]

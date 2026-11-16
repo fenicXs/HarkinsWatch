@@ -9,6 +9,7 @@ from showwatch.domain.models import Movie, User, WatchItem
 from showwatch.domain.title_match import find_matches
 
 MAX_QUERY_LENGTH = 80
+MAX_LISTED = 30  # keeps /list under Telegram's 4096-character limit
 
 STAGE_TEXT = {
     "waiting": "waiting for it to be listed",
@@ -81,19 +82,43 @@ async def handle_watch(env: Env, sender: Sender, query: str) -> None:
             titles = find_matches(query, [m.title for m in listed])
             chosen = _movies_with_titles(listed, titles)
             if chosen:
-                text, buttons = "Which one?", keyboards.movie_choices(chosen)
+                rows = list(keyboards.movie_choices(chosen))
+                none_of_these = keyboards.watch_for(query)
+                if none_of_these is not None:  # close spellings are not always the right film
+                    rows.append([none_of_these])
+                text, buttons = "Which one?", rows
             else:
                 # Nothing listed matches yet: keep watching for the title (insider mode).
-                await watches.add(
-                    session, user_id=user.id, city_id=user.current_city_id, query=query
-                )
-                text = (
-                    f"No listed movie matches '{query}' yet. I'll keep watching for it and "
-                    "tell you when something with that title appears. /list shows your "
-                    "watches and /unwatch removes one."
-                )
+                text = await _watch_for_title(session, user, query)
                 buttons = None
     await env.notifier.send(sender.chat_id, text, buttons)
+
+
+async def _watch_for_title(session: AsyncSession, user: User, query: str) -> str:
+    """Save a watch for a title nothing lists yet. Same words in any case count as one watch."""
+    assert user.current_city_id is not None
+    existing = await watches.list_for_user(session, user.id)
+    if any(w.query.casefold() == query.casefold() for w in existing):
+        return f"You're already watching for '{query}'."
+    await watches.add(session, user_id=user.id, city_id=user.current_city_id, query=query)
+    return (
+        f"No listed movie matches '{query}' yet. I'll keep watching for it and tell you when "
+        "something with that title appears. /list shows your watches and /unwatch removes one."
+    )
+
+
+async def handle_watch_for(env: Env, sender: Sender, query: str) -> None:
+    """The user tapped "None of these": watch for exactly what they typed."""
+    query = " ".join(query.split())
+    async with env.session_factory() as session, session.begin():
+        user = await _user(session, sender)
+        if user is None:
+            return
+        if not query or len(query) > MAX_QUERY_LENGTH or user.current_city_id is None:
+            text = NEED_CITY if user.current_city_id is None else "Please use a shorter title."
+        else:
+            text = await _watch_for_title(session, user, query)
+    await env.notifier.send(sender.chat_id, text)
 
 
 def _movies_with_titles(listed: list[Movie], titles: list[str]) -> list[Movie]:
@@ -143,8 +168,10 @@ async def handle_list(env: Env, sender: Sender) -> None:
         items = await watches.list_for_user(session, user.id)
         lines = [
             f"{n}. {await _label(session, item)}: {STAGE_TEXT[item.stage]}"
-            for n, item in enumerate(items, start=1)
+            for n, item in enumerate(items[:MAX_LISTED], start=1)
         ]
+        if len(items) > MAX_LISTED:
+            lines.append(f"...and {len(items) - MAX_LISTED} more.")
     text = "Your watches:\n" + "\n".join(lines) if lines else "You're not watching anything."
     await env.notifier.send(sender.chat_id, text)
 
@@ -155,7 +182,7 @@ async def handle_unwatch(env: Env, sender: Sender) -> None:
         if user is None:
             return
         items = await watches.list_for_user(session, user.id)
-        choices = [(item.id, await _label(session, item)) for item in items]
+        choices = [(item.id, await _label(session, item)) for item in items[:MAX_LISTED]]
     if not choices:
         await env.notifier.send(sender.chat_id, "You're not watching anything.")
         return

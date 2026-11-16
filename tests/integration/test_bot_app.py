@@ -5,9 +5,11 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telegram import Update
+from telegram.error import BadRequest
 
 from conftest import ADMIN_ID
 from showwatch.bot.app import HELP_TEXT, App, build_application, on_startup, sender_from
+from showwatch.bot.handlers.access import ACCESS_REQUESTED
 from showwatch.core.settings import Settings
 from showwatch.db.repositories import catalog, movies, users
 from showwatch.domain.models import MovieListing
@@ -107,8 +109,9 @@ async def test_commands_reach_their_handlers_with_their_arguments(
     assert bot.to(ADMIN_ID)[-1] == "City set to Phoenix."
 
     await _feed(application, message_update(3, ADMIN_ID, "/watch dune", name="Root"))
-    (movie_button,) = bot.callback_data_to(ADMIN_ID)[2:]
-    assert movie_button.startswith("watchpick:")
+    offered = bot.callback_data_to(ADMIN_ID)[2:]
+    assert [d.split(":")[0] for d in offered] == ["watchpick", "watchfor"]
+    movie_button = offered[0]
 
     await _feed(application, callback_update(4, ADMIN_ID, movie_button, name="Root"))
     assert bot.to(ADMIN_ID)[-1] == "Watching DUNE: Part Three."
@@ -145,15 +148,14 @@ async def test_group_chats_are_ignored(application: App, bot: FakeBot) -> None:
     assert bot.sent == []
 
 
-async def test_updates_without_a_person_are_ignored(application: App, bot: FakeBot) -> None:
-    await _feed(
-        application,
-        {
-            "update_id": 9,
-            "edited_message": {"message_id": 1, "date": 1, "chat": {"id": 5, "type": "channel"}},
-        },
-    )
+async def test_updates_without_a_sender_are_ignored_and_not_recorded(
+    application: App, bot: FakeBot
+) -> None:
+    data = message_update(9, 111, "/start")
+    del data["message"]["from"]  # e.g. posted on behalf of a channel
+    await _feed(application, data)
     assert bot.sent == []
+    assert await _status(application, 111) is None
 
 
 def test_sender_from_reads_private_chats_only() -> None:
@@ -168,3 +170,125 @@ def test_sender_from_reads_private_chats_only() -> None:
 
 async def test_startup_creates_the_admin(application: App) -> None:
     assert await _status(application, ADMIN_ID) == "approved"
+
+
+async def test_if_the_gate_itself_fails_the_update_is_dropped(
+    application: App, bot: FakeBot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PTB carries on to the next handler after an exception unless told to stop."""
+
+    async def broken_gate(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr("showwatch.bot.handlers.access.gate", broken_gate)
+    await _feed(application, message_update(1, 111, "/start"))
+    await _feed(application, message_update(2, 111, "hello"))
+    assert bot.sent == []  # no "You're set up", no help text
+
+
+async def _prepare_admin_with_a_movie(application: App) -> None:
+    """The admin is in Phoenix and Phoenix lists one coming-soon movie, Dune."""
+    factory = application.bot_data["env"].session_factory
+    async with factory() as session, session.begin():
+        chain = await catalog.get_chain_by_code(session, "harkins")
+        phx = await catalog.get_city_by_code(session, "phx")
+        assert chain and phx
+        await movies.upsert_movie(
+            session,
+            chain.id,
+            phx.id,
+            MovieListing("dune", "DUNE: Part Three", "https://example.test/dune", "coming_soon"),
+        )
+        admin = await users.get_by_telegram_id(session, ADMIN_ID)
+        assert admin
+        await users.set_current_city(session, admin.id, phx.id)
+
+
+async def test_a_denied_user_gets_nothing_through_the_real_routing(
+    application: App, bot: FakeBot
+) -> None:
+    await _feed(application, message_update(1, 111, "/start", name="Ann"))
+    deny = bot.callback_data_to(ADMIN_ID)[1]
+    await _feed(application, callback_update(2, ADMIN_ID, deny, name="Root"))
+    bot.sent.clear()
+
+    for number, text in enumerate(["/start", "/list", "/watch dune", "hello"], start=3):
+        await _feed(application, message_update(number, 111, text))
+
+    assert await _status(application, 111) == "denied"
+    assert bot.to(111) == []
+
+
+async def test_a_pending_user_only_ever_hears_the_access_reply(
+    application: App, bot: FakeBot
+) -> None:
+    for number, text in enumerate(["/start", "hello", "/nonsense", "/list"], start=1):
+        await _feed(application, message_update(number, 111, text))
+    assert bot.to(111) == [ACCESS_REQUESTED]  # no help text, no "You're set up"
+
+
+async def test_an_approved_user_who_is_not_the_admin_cannot_approve_anyone(
+    application: App, bot: FakeBot
+) -> None:
+    await _feed(application, message_update(1, 222, "/start", name="Bo"))
+    await _feed(application, message_update(2, 111, "/start", name="Ann"))
+    approve_bo, _ = bot.callback_data_to(ADMIN_ID)[:2]
+    approve_ann = bot.callback_data_to(ADMIN_ID)[2]
+    await _feed(application, callback_update(3, ADMIN_ID, approve_bo, name="Root"))
+    assert await _status(application, 222) == "approved"
+
+    await _feed(application, callback_update(4, 222, approve_ann, name="Bo"))  # Bo, not the admin
+
+    assert await _status(application, 111) == "pending"
+
+
+async def test_a_command_addressed_to_the_bot_by_name_still_works(
+    application: App, bot: FakeBot
+) -> None:
+    await _prepare_admin_with_a_movie(application)
+    await _feed(
+        application, message_update(1, ADMIN_ID, "/watch@showwatch_test_bot dune", name="Root")
+    )
+    assert bot.callback_data_to(ADMIN_ID)[0].startswith("watchpick:")
+
+
+async def test_none_of_these_saves_a_watch_for_the_typed_words(
+    application: App, bot: FakeBot
+) -> None:
+    await _prepare_admin_with_a_movie(application)
+    await _feed(application, message_update(1, ADMIN_ID, "/watch dune messiah", name="Root"))
+    assert "watchfor:dune messiah" in bot.callback_data_to(ADMIN_ID)
+
+    await _feed(application, callback_update(2, ADMIN_ID, "watchfor:dune messiah", name="Root"))
+    await _feed(application, message_update(3, ADMIN_ID, "/list", name="Root"))
+
+    assert "dune messiah: waiting for it to be listed" in bot.to(ADMIN_ID)[-1]
+
+
+async def test_a_button_still_works_when_telegram_refuses_to_acknowledge_it(
+    application: App, bot: FakeBot
+) -> None:
+    bot._answer_error = BadRequest("Query is too old and response timeout expired")
+    await _feed(application, callback_update(1, ADMIN_ID, "city:phx", name="Root"))
+    assert bot.to(ADMIN_ID)[-1] == "City set to Phoenix."
+
+
+@pytest.mark.parametrize("data", ["approve:²", "approve:١٢", "unwatch:٣"])
+async def test_digit_look_alikes_in_button_data_are_ignored(
+    application: App, bot: FakeBot, data: str
+) -> None:
+    await _feed(application, callback_update(1, ADMIN_ID, data, name="Root"))
+    assert bot.sent == []  # int() would have raised on these
+
+
+async def test_startup_asks_the_admin_again_about_requests_still_waiting(
+    application: App, bot: FakeBot
+) -> None:
+    await _feed(application, message_update(1, 111, "/start", name="Ann"))
+    bot.sent.clear()
+
+    await on_startup(application)  # e.g. the bot restarted
+
+    assert len(bot.to(ADMIN_ID)) == 1
+    assert "Ann" in bot.to(ADMIN_ID)[0]
+    assert [d.split(":")[0] for d in bot.callback_data_to(ADMIN_ID)] == ["approve", "deny"]

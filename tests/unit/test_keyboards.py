@@ -71,3 +71,14 @@ def test_a_button_over_64_bytes_is_refused() -> None:
 def test_the_longest_real_callback_is_far_below_the_limit() -> None:
     biggest = keyboards.callback_data(keyboards.WATCHPICK, 2**63 - 1)  # a bigint id
     assert len(biggest.encode()) <= CALLBACK_DATA_MAX_BYTES
+
+
+def test_none_of_these_button_carries_the_typed_words() -> None:
+    button = keyboards.watch_for("dune messiah")
+    assert button is not None
+    assert button.data == "watchfor:dune messiah"
+
+
+def test_none_of_these_button_is_left_out_when_the_words_do_not_fit() -> None:
+    assert keyboards.watch_for("x" * 60) is None  # "watchfor:" + 60 is over 64 bytes
+    assert keyboards.watch_for("é" * 30) is None  # 60 bytes of text plus the prefix

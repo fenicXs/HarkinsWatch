@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -64,7 +65,16 @@ def _sender(update: Update) -> Sender:
 async def _gate(update: Update, context: Context) -> None:
     """Runs first for every update; stops it unless the sender is allowed through."""
     sender = sender_from(update)
-    if sender is None or await access.gate(_env(context), sender) == "stop":
+    if sender is None:
+        raise ApplicationHandlerStop
+    try:
+        decision = await access.gate(_env(context), sender)
+    except Exception:
+        # python-telegram-bot carries on to the next handler after an exception, which would let
+        # an unchecked user through. Fail closed instead.
+        log.exception("gate_failed")
+        raise ApplicationHandlerStop from None
+    if decision == "stop":
         raise ApplicationHandlerStop
 
 
@@ -96,7 +106,10 @@ async def _button(update: Update, context: Context) -> None:
     """Route a button tap by its `<action>:<id>` data."""
     query = update.callback_query
     assert query is not None
-    await query.answer()  # stops the spinner on the user's button
+    try:
+        await query.answer()  # stops the spinner on the user's button
+    except TelegramError as error:  # for example an old button: the action can still run
+        log.info("answer_callback_failed", error=str(error))
     parsed = keyboards.parse_callback(query.data or "")
     if parsed is None:
         return
@@ -104,7 +117,9 @@ async def _button(update: Update, context: Context) -> None:
     env, sender = _env(context), _sender(update)
     if action == keyboards.CITY:
         await watch.handle_city_pick(env, sender, ref)
-    elif ref.isdigit():
+    elif action == keyboards.WATCHFOR:
+        await watch.handle_watch_for(env, sender, ref)
+    elif ref.isascii() and ref.isdigit():
         number = int(ref)
         if action == keyboards.APPROVE:
             await access.handle_decision(env, sender, "approve", number)
@@ -122,6 +137,10 @@ async def on_startup(application: App) -> None:
     if engine is not None:
         await check_connection(engine)
     await access.ensure_admin(_env_of(application))
+    try:
+        await access.send_pending_requests(_env_of(application))
+    except Exception:  # never stop the bot from starting over a notification
+        log.exception("pending_requests_failed")
     log.info("ready", service="bot", version=__version__)
 
 

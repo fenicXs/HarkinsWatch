@@ -102,6 +102,13 @@ async def set_current_city(session: AsyncSession, user_id: int, city_id: int) ->
     await session.flush()
 
 
+async def list_pending(session: AsyncSession) -> list[User]:
+    rows = await session.scalars(
+        select(tables.User).where(tables.User.status == "pending").order_by(tables.User.id)
+    )
+    return [User.model_validate(r) for r in rows]
+
+
 async def list_approved_in_city(session: AsyncSession, city_id: int) -> list[User]:
     rows = await session.scalars(
         select(tables.User)

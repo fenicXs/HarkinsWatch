@@ -158,3 +158,49 @@ async def test_start_welcomes_an_approved_user(env: Env, notifier: FakeNotifier)
 async def test_an_unnamed_user_is_described_by_their_id(env: Env, notifier: FakeNotifier) -> None:
     await access.gate(env, Sender(telegram_user_id=333, chat_id=333, display_name=None))
     assert "user 333" in notifier.to(ADMIN_ID)[0]
+
+
+async def test_pending_requests_are_put_to_the_admin_again(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    """The first request can be lost (the admin may not have started the bot yet)."""
+    await access.gate(env, _sender(111, "Ann"))
+    await access.gate(env, _sender(222, "Bo"))
+    ann = await _get(env, 111)
+    assert ann is not None
+    await access.handle_decision(env, _sender(ADMIN_ID), "approve", ann.id)  # Ann is settled
+    notifier.sent.clear()
+
+    await access.send_pending_requests(env)
+
+    assert len(notifier.to(ADMIN_ID)) == 1  # only Bo is still waiting
+    assert "Bo" in notifier.to(ADMIN_ID)[0]
+    bo = await _get(env, 222)
+    assert bo is not None
+    assert notifier.buttons_to(ADMIN_ID) == [
+        ("Approve", f"approve:{bo.id}"),
+        ("Deny", f"deny:{bo.id}"),
+    ]
+
+
+async def test_the_admins_start_brings_up_the_waiting_requests(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    await access.gate(env, _sender(111, "Ann"))
+    notifier.sent.clear()
+
+    await access.handle_start(env, _sender(ADMIN_ID))
+    assert "You're set up" in notifier.to(ADMIN_ID)[0]
+    assert "Ann" in notifier.to(ADMIN_ID)[1]
+
+    notifier.sent.clear()
+    await access.handle_start(env, _sender(111))  # other users' /start does not
+    assert len(notifier.to(ADMIN_ID)) == 0
+
+
+async def test_the_admin_cannot_change_their_own_access(env: Env, notifier: FakeNotifier) -> None:
+    admin = await _get(env, ADMIN_ID)
+    assert admin is not None
+    await access.handle_decision(env, _sender(ADMIN_ID), "deny", admin.id)
+    assert notifier.to(ADMIN_ID) == ["You can't change your own access."]
+    assert (await _get(env, ADMIN_ID)).status == "approved"  # type: ignore[union-attr]

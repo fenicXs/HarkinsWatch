@@ -109,6 +109,7 @@ async def test_watch_offers_the_matching_movies_and_saves_nothing_yet(
     assert [data for _, data in notifier.buttons_to(1)] == [
         f"watchpick:{dune.id}",
         f"watchpick:{imax.id}",
+        "watchfor:dune",  # "None of these": watch for the typed words instead
     ]
     assert await _watches(env, uid) == []
 
@@ -134,10 +135,9 @@ async def test_watch_with_no_listed_match_keeps_watching_for_the_title(
     assert (item.query, item.movie_id, item.stage) == ("Some Unannounced Film", None, "waiting")
     assert "keep watching" in notifier.to(1)[0]
 
-    await watch.handle_watch(
-        env, _sender(1), "some unannounced film"
-    )  # different case: a new query
-    assert len(await _watches(env, uid)) == 2
+    await watch.handle_watch(env, _sender(1), "some unannounced FILM")  # same words, other case
+    assert notifier.to(1)[-1] == "You're already watching for 'some unannounced FILM'."
+    assert len(await _watches(env, uid)) == 1
 
 
 async def test_picking_a_coming_soon_movie_saves_a_watch(env: Env, notifier: FakeNotifier) -> None:
@@ -271,3 +271,65 @@ async def test_handlers_do_nothing_for_someone_who_is_not_approved(
     await action(env, _sender(5))  # pending user
     await action(env, _sender(6))  # not even known
     assert notifier.sent == []
+
+
+# --- "None of these", and list limits ---------------------------------------------------------
+
+
+async def test_none_of_these_watches_for_the_typed_words(env: Env, notifier: FakeNotifier) -> None:
+    uid = await _approved_user(env, 1)
+    await watch.handle_watch_for(env, _sender(1), "  Dune   Messiah ")
+    (item,) = await _watches(env, uid)
+    assert (item.query, item.movie_id, item.stage) == ("Dune Messiah", None, "waiting")
+    assert "keep watching" in notifier.to(1)[0]
+
+    await watch.handle_watch_for(env, _sender(1), "dune messiah")  # a second tap, other case
+    assert notifier.to(1)[-1] == "You're already watching for 'dune messiah'."
+    assert len(await _watches(env, uid)) == 1
+
+
+async def test_none_of_these_needs_a_city_and_a_sensible_title(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    no_city = await _approved_user(env, 1, city=None)
+    await watch.handle_watch_for(env, _sender(1), "dune")
+    assert notifier.to(1) == [watch.NEED_CITY]
+    assert await _watches(env, no_city) == []
+
+    uid = await _approved_user(env, 2)
+    await watch.handle_watch_for(env, _sender(2), "x" * (watch.MAX_QUERY_LENGTH + 1))
+    await watch.handle_watch_for(env, _sender(2), "   ")
+    assert notifier.to(2) == ["Please use a shorter title."] * 2
+    assert await _watches(env, uid) == []
+
+
+async def test_a_long_title_gets_choices_but_no_none_of_these_button(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    """The button carries the title in 64 bytes of callback data; a long one cannot fit."""
+    await _approved_user(env, 1)
+    long_title = "A Very Long Film Title " * 3  # 69 characters
+    await _add_movie(env, "long", "coming_soon", title=long_title.strip())
+    await watch.handle_watch(env, _sender(1), long_title.strip())
+    assert [d for _, d in notifier.buttons_to(1)][0].startswith("watchpick:")
+    assert not any(d.startswith("watchfor:") for _, d in notifier.buttons_to(1))
+
+
+async def test_list_and_unwatch_are_capped_so_telegram_accepts_them(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    uid = await _approved_user(env, 1)
+    total = watch.MAX_LISTED + 5
+    async with env.session_factory() as session, session.begin():
+        phx = await catalog.get_city_by_code(session, "phx")
+        assert phx
+        for n in range(total):
+            await watches.add(session, user_id=uid, city_id=phx.id, query=f"film {n:02d}")
+
+    await watch.handle_list(env, _sender(1))
+    text = notifier.to(1)[-1]
+    assert text.count("\n") == watch.MAX_LISTED + 1  # header + 30 items + the "more" line
+    assert text.endswith("...and 5 more.")
+
+    await watch.handle_unwatch(env, _sender(1))
+    assert len(notifier.buttons_to(1)) == watch.MAX_LISTED

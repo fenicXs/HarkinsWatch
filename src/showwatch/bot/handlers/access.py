@@ -76,11 +76,31 @@ async def gate(env: Env, sender: Sender) -> Decision:
     return "stop"
 
 
+async def send_pending_requests(env: Env) -> None:
+    """Ask the admin about every user still waiting.
+
+    The first request can be lost: the admin cannot be messaged until they have started the
+    bot, and the bot can stop between saving a request and sending it. So this runs at start-up
+    and whenever the admin sends /start.
+    """
+    async with env.session_factory() as session:
+        waiting = await users.list_pending(session)
+    for user in waiting:
+        await env.notifier.send(
+            env.admin_telegram_user_id,
+            f"{_name(user.display_name, user.telegram_user_id)} "
+            f"(id {user.telegram_user_id}) asks for access.",
+            keyboards.approve_deny(user.id),
+        )
+
+
 async def handle_start(env: Env, sender: Sender) -> None:
     await env.notifier.send(
         sender.chat_id,
         "You're set up. Choose your city with /city, then watch a movie with /watch <title>.",
     )
+    if sender.telegram_user_id == env.admin_telegram_user_id:
+        await send_pending_requests(env)
 
 
 async def handle_decision(
@@ -95,6 +115,8 @@ async def handle_decision(
         target = await users.get(session, target_user_id)
         if target is None:
             outbox.add(sender.chat_id, "That user no longer exists.")
+        elif target.telegram_user_id == env.admin_telegram_user_id:
+            outbox.add(sender.chat_id, "You can't change your own access.")
         else:
             who = _name(target.display_name, target.telegram_user_id)
             wanted: Literal["approved", "denied"] = "approved" if action == "approve" else "denied"

@@ -43,6 +43,7 @@ class FakeBot(ExtBot):  # type: ignore[type-arg]
         # PTB bots are frozen: only underscore names can be set after construction.
         self._sent: list[tuple[int, str, Any]] = []
         self._answered: list[str] = []
+        self._answer_error: Exception | None = None  # set to make answering fail
 
     @property
     def sent(self) -> list[tuple[int, str, Any]]:
@@ -68,6 +69,8 @@ class FakeBot(ExtBot):  # type: ignore[type-arg]
     async def answer_callback_query(  # type: ignore[override]
         self, callback_query_id: str, *args: Any, **kwargs: Any
     ) -> bool:
+        if self._answer_error is not None:
+            raise self._answer_error
         self._answered.append(callback_query_id)
         return True
 

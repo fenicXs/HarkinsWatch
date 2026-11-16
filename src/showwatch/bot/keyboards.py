@@ -8,13 +8,14 @@ button can only ever act on the record it was made for. Each string is at most 6
 from collections.abc import Sequence
 
 from showwatch.domain.models import City, Movie
-from showwatch.notify import Button, Buttons
+from showwatch.notify import CALLBACK_DATA_MAX_BYTES, Button, Buttons
 
 APPROVE = "approve"
 DENY = "deny"
 WATCHPICK = "watchpick"
 UNWATCH = "unwatch"
 CITY = "city"
+WATCHFOR = "watchfor"
 
 MAX_LABEL = 60  # keep long movie titles from filling the screen
 
@@ -46,6 +47,15 @@ def approve_deny(user_id: int) -> Buttons:
 
 def movie_choices(movies: Sequence[Movie]) -> Buttons:
     return [[Button(_label(m.title), callback_data(WATCHPICK, m.id))] for m in movies]
+
+
+def watch_for(query: str) -> Button | None:
+    """A "none of these" button that carries the typed title itself (there is no server-side
+    state to hold it). None when the title is too long to fit in 64 bytes of callback data."""
+    data = callback_data(WATCHFOR, query)
+    if len(data.encode()) > CALLBACK_DATA_MAX_BYTES:
+        return None
+    return Button("None of these: keep watching for my words", data)
 
 
 def watch_choices(items: Sequence[tuple[int, str]]) -> Buttons:
