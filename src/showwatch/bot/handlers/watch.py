@@ -137,7 +137,9 @@ async def handle_watch_pick(env: Env, sender: Sender, movie_id: int) -> None:
         if user is None:
             return
         movie = await movies.get(session, movie_id)
-        if movie is None or movie.city_id != user.current_city_id:
+        if user.current_city_id is None:
+            text = NEED_CITY
+        elif movie is None or movie.city_id != user.current_city_id:
             text = "That movie is no longer available."
         elif movie.status == "now_showing":
             # Saves nothing: the date and showtime flow arrives with M3.
@@ -167,7 +169,7 @@ async def handle_list(env: Env, sender: Sender) -> None:
             return
         items = await watches.list_for_user(session, user.id)
         lines = [
-            f"{n}. {await _label(session, item)}: {STAGE_TEXT[item.stage]}"
+            f"{n}. {await _label(session, item)}: {STAGE_TEXT.get(item.stage, item.stage)}"
             for n, item in enumerate(items[:MAX_LISTED], start=1)
         ]
         if len(items) > MAX_LISTED:

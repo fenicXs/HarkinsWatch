@@ -333,3 +333,12 @@ async def test_list_and_unwatch_are_capped_so_telegram_accepts_them(
 
     await watch.handle_unwatch(env, _sender(1))
     assert len(notifier.buttons_to(1)) == watch.MAX_LISTED
+
+
+async def test_a_stale_movie_button_without_a_city_asks_for_a_city(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    await _approved_user(env, 1, city=None)
+    dune = await _add_movie(env, "dune", "coming_soon")
+    await watch.handle_watch_pick(env, _sender(1), dune.id)
+    assert notifier.to(1) == [watch.NEED_CITY]

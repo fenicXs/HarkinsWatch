@@ -16,8 +16,11 @@ class FakeNotifier:
 
     def __init__(self) -> None:
         self.sent: list[tuple[int, str, Buttons | None]] = []
+        self.unreachable: set[int] = set()  # chats where sending fails, e.g. the user blocked us
 
     async def send(self, chat_id: int, text: str, buttons: Buttons | None = None) -> bool:
+        if chat_id in self.unreachable:
+            return False
         self.sent.append((chat_id, text, buttons))
         return True
 

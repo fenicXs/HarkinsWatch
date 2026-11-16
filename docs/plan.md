@@ -260,7 +260,7 @@ Done when: all integration tests pass against Postgres, including "no duplicate 
 | `tests/unit/test_title_match.py`, `tests/unit/test_keyboards.py`, `tests/unit/test_notify.py` | Create | Matcher, button data and notifier (no database) |
 | `tests/integration/test_access.py`, `test_watch_handlers.py`, `test_bot_app.py` | Create | Handler tests need Postgres, so they live under `integration/` (moved from `unit/`). `tests/telegramfakes.py` holds the fake notifier, a fake python-telegram-bot `Bot` and update builders; `test_bot_app.py` runs real PTB routing end to end |
 
-**Title matching.** `find_matches(query: str, titles: list[str]) -> list[str]` is a pure function; the repository supplies the titles of `movies` rows for the user's city (both statuses). It returns lowercase substring matches; only if there are none, `difflib.get_close_matches(n=5, cutoff=0.3)`; at most 5 results.
+**Title matching.** `find_matches(query: str, titles: list[str]) -> list[str]` is a pure function; the repository supplies the titles of `movies` rows for the user's city (both statuses). It returns substring matches, ignoring case, punctuation and extra spaces on both sides (an improvement on the legacy matcher, which compared lowercase text only: `dune!` now finds `DUNE: Part Three`); only if there are none, `difflib.get_close_matches(n=5, cutoff=0.3)`; at most 5 results.
 
 **Handler spec.**
 

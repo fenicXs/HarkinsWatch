@@ -37,3 +37,11 @@ def test_nothing_close_gives_no_results() -> None:
 def test_blank_queries_and_empty_title_lists_give_no_results() -> None:
     assert find_matches("   ", TITLES) == []
     assert find_matches("dune", []) == []
+
+
+def test_punctuation_and_spacing_are_ignored_on_both_sides() -> None:
+    assert find_matches("dune!", TITLES) == ["DUNE: Part Three", "DUNE: Part Three (IMAX 70mm)"]
+    assert find_matches("dune   part", TITLES)[0] == "DUNE: Part Three"
+    assert find_matches("spider man", TITLES) == [TITLES[3]]
+    assert find_matches("Spider-Man: Un nuevo", TITLES) == [TITLES[3]]
+    assert find_matches("!!!", TITLES) == []

@@ -49,6 +49,7 @@ async def ensure_admin(env: Env) -> None:
 async def gate(env: Env, sender: Sender) -> Decision:
     """Decide whether this update may reach a handler. Runs before every other handler."""
     outbox = _Outbox()
+    tell_user_id: int | None = None
     async with env.session_factory() as session, session.begin():
         user, created = await users.create_pending(
             session,
@@ -62,8 +63,7 @@ async def gate(env: Env, sender: Sender) -> Decision:
             return "allow"
 
         if user.status == "pending" and not user.pending_notified:
-            await users.mark_pending_notified(session, user.id)
-            outbox.add(sender.chat_id, ACCESS_REQUESTED)
+            tell_user_id = user.id
             if created:
                 log.info("access_requested", user_id=user.id)
                 outbox.add(
@@ -72,6 +72,10 @@ async def gate(env: Env, sender: Sender) -> Decision:
                     f"(id {sender.telegram_user_id}) asks for access.",
                     keyboards.approve_deny(user.id),
                 )
+    if tell_user_id is not None and await env.notifier.send(sender.chat_id, ACCESS_REQUESTED):
+        # Only now is the user told, so a failed send is tried again on their next message.
+        async with env.session_factory() as session, session.begin():
+            await users.mark_pending_notified(session, tell_user_id)
     await _flush(env, outbox)
     return "stop"
 

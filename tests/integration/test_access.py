@@ -204,3 +204,20 @@ async def test_the_admin_cannot_change_their_own_access(env: Env, notifier: Fake
     await access.handle_decision(env, _sender(ADMIN_ID), "deny", admin.id)
     assert notifier.to(ADMIN_ID) == ["You can't change your own access."]
     assert (await _get(env, ADMIN_ID)).status == "approved"  # type: ignore[union-attr]
+
+
+async def test_a_failed_access_reply_is_tried_again_on_the_next_message(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    notifier.unreachable.add(111)  # the reply to Ann cannot be delivered
+    assert await access.gate(env, _sender(111, "Ann")) == "stop"
+    ann = await _get(env, 111)
+    assert ann is not None
+    assert ann.pending_notified is False
+    assert len(notifier.to(ADMIN_ID)) == 1  # the admin was still asked
+
+    notifier.unreachable.clear()
+    assert await access.gate(env, _sender(111, "Ann")) == "stop"
+    assert notifier.to(111) == [access.ACCESS_REQUESTED]  # delivered on the retry
+    assert (await _get(env, 111)).pending_notified is True  # type: ignore[union-attr]
+    assert len(notifier.to(ADMIN_ID)) == 1  # and the admin was not asked twice
