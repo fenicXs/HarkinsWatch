@@ -196,7 +196,7 @@ Every other milestone lists its files as Path | Action (Create, Modify, Move, De
 
 | Name | Type | Default | Read by |
 |---|---|---|---|
-| `DATABASE_URL` | DSN, `postgresql+asyncpg://showwatch:<password>@localhost:5433/showwatch` in `.env` | none (required) | bot, worker, migrate |
+| `DATABASE_URL` | DSN, `postgresql+asyncpg://showwatch:<password>@127.0.0.1:5433/showwatch` in `.env` (127.0.0.1, not localhost: on Windows `localhost` tries IPv6 first and each connection waits about 2 s) | none (required) | bot, worker, migrate |
 | `TEST_DATABASE_URL` | DSN | none | integration tests |
 | `POSTGRES_PASSWORD` | secret | none | compose |
 | `TELEGRAM_BOT_TOKEN` | secret | none; a different bot from legacy's (C2); required for `bot` | bot, `notify.py` |
@@ -235,6 +235,9 @@ Done when:
 | `migrations/env.py` | Modify | Set `target_metadata` to the tables' metadata (the Alembic scaffold itself exists from M0) |
 | `migrations/versions/0001_initial.py` | Create | Schema and seed rows |
 | `src/showwatch/db/repositories/users.py`, `watches.py`, `movies.py`, `signals.py`, `alerts.py` | Create | The only code that writes SQL |
+| `src/showwatch/db/repositories/catalog.py` | Create | Read-only lookups for cities, chains and theatres (added during M1; M2's `/city` and M3's scheduler need them) |
+| `src/showwatch/domain/title_match.py`, `src/showwatch/domain/models.py` | Create / Modify | `normalize_title` (needed by `movies.upsert_movie`; M2 adds `find_matches` to the same file) and the `Job`, `ChainInfo`, `ChainSnapshot` row models |
+| `tests/dbtools.py`, `tests/unit/test_queue_rules.py`, `tests/unit/test_title_normalize.py` | Create | Test helpers (create a database, run Alembic); catalogue and title rules that need no database |
 | `src/showwatch/db/queue.py` | Create | `enqueue`, `claim(worker_id)` with `FOR UPDATE SKIP LOCKED` and the skip predicate (Appendix B), `complete`, `fail` with back-off, `requeue(delay)` (no attempt counted), `sweep()` |
 | `tests/integration/test_migrations.py`, `test_queue.py`, `test_repositories.py` | Create | Cases below |
 
@@ -428,7 +431,7 @@ Every table: `id bigint identity primary key`, `created_at timestamptz not null 
 | `watch_items` | `user_id`, `city_id`, `query`, `movie_id` null, `stage default 'waiting'`, `fast_until null`, `format_pref null` | unique `(user_id, city_id, query)`; `stage` in `waiting|listed|dates|venues|sessions|done` |
 | `signals` | `watch_item_id`, `stage`, `evidence jsonb`, `seen_at default now()` | unique `(watch_item_id, stage)` |
 | `alerts` | `user_id`, `dedupe_key`, `sent_at default now()` | unique `(user_id, dedupe_key)` |
-| `jobs` | `kind`, `payload jsonb`, `status default 'queued'`, `run_after default now()`, `attempts int default 0`, `max_attempts int`, `chain_id null`, `city_id null`, `locked_by null`, `locked_at null`, `last_error null`, `result jsonb null` | index `(status, run_after)`; `status` in `queued|running|done|failed` |
+| `jobs` | `kind`, `payload jsonb`, `status default 'queued'`, `run_after default now()`, `attempts int default 0`, `max_attempts int`, `chain_id null`, `city_id null`, `locked_by null`, `locked_at null`, `last_error null`, `result jsonb null` | index `(status, run_after)`; unique partial index `uq_jobs_running_limit` on `(kind, chain_id, coalesce(city_id, 0))` where `status = 'running'` and `kind` is `check_chain`, `book` or `probe_signals` (the database-level guard behind the concurrency limits; added during M1); `status` in `queued|running|done|failed` |
 | `chain_snapshots` | `chain_id`, `city_id`, `taken_at default now()`, `movie_count int`, `status` | `status` in `good|suspect` |
 | `parsed_requests` (M6, migration `0002`) | `user_id`, `payload jsonb`, `expires_at` | none |
 
@@ -444,7 +447,8 @@ Seed rows in `0001`: cities `phx` (`America/Phoenix`) and `blr` (`Asia/Kolkata`)
 | `probe_signals` | `{watch_item_id}` | `worker/handlers/probe_signals.py` | 3 | 60 s × 2^(attempts − 1) | one per chain |
 
 - `enqueue()` fills `jobs.chain_id`, `jobs.city_id` (where the payload names them) and `max_attempts` from this table; `attempts` counts failed runs.
-- Skip predicate in `claim()`: skip a queued job when another `running` job has the same `kind`, the same `chain_id` and, for `check_chain` only, the same `city_id`.
+- Skip predicate in `claim()`: skip a queued job when another `running` job has the same `kind`, the same `chain_id` and, for `check_chain` only, the same `city_id`. If two workers race past that check, the unique index `uq_jobs_running_limit` (Appendix A) rejects the second one and `claim()` moves on to the next job.
+- `enqueue(session, kind, payload, *, chain_id=None, city_id=None, run_after=None)` takes the chain and city ids as arguments (the caller knows them); `check_chain` needs both, `book` and `probe_signals` need a chain and no city, `search_showtimes` needs neither.
 - `locked_by` is `<container hostname>:<pid>`; the lock timeout is `JOB_LOCK_TIMEOUT_S` (900 s). `jobs.result` stores the `book` outcome (`held`, `manual` or `failed` plus fields); other kinds leave it null.
 
 ## Execution method

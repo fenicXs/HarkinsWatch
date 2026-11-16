@@ -58,4 +58,11 @@ exclude = ["legacy/"]
 [tool.coverage.run]
 source = ["src/showwatch"]
 branch = true
+concurrency = ["greenlet", "thread"]
 omit = ["legacy/*"]
+
+[tool.coverage.report]
+# The 85% gate covers the logic modules; each milestone adds its own (docs/plan.md, CI).
+include = ["src/showwatch/domain/*", "src/showwatch/db/*"]
+fail_under = 85
+show_missing = true

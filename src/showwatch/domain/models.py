@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Flag, auto
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -120,6 +120,44 @@ class User(_Row):
     is_admin: bool
     pending_notified: bool
     current_city_id: int | None
+
+
+JobStatus = Literal["queued", "running", "done", "failed"]
+SnapshotStatus = Literal["good", "suspect"]
+
+
+class ChainInfo(_Row):
+    """The `chains` table row. (`Chain` below is the plug-in interface, not this.)"""
+
+    id: int
+    code: str
+    enabled: bool
+    blocked_until: datetime | None
+
+
+class ChainSnapshot(_Row):
+    id: int
+    chain_id: int
+    city_id: int
+    taken_at: datetime
+    movie_count: int
+    status: SnapshotStatus
+
+
+class Job(_Row):
+    id: int
+    kind: str
+    payload: dict[str, Any]
+    status: JobStatus
+    run_after: datetime
+    attempts: int
+    max_attempts: int
+    chain_id: int | None
+    city_id: int | None
+    locked_by: str | None
+    locked_at: datetime | None
+    last_error: str | None
+    result: dict[str, Any] | None
 
 
 class Chain(Protocol):

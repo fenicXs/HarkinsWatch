@@ -36,4 +36,4 @@ This file only routes. Content lives in the files it points to.
 - Never print or commit secrets. `.env` is gitignored; `.env.example` lists key names only. Compare key names, never values.
 - Only code in `src/showwatch/db/` writes SQL. Telegram button data carries record IDs and is at most 64 bytes.
 - Benchmark and status numbers live only in `README.md` → Results.
-- Before each commit run: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`.
+- Before each commit run: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest --cov`. The integration tests need Postgres: `docker compose up -d postgres`, with `TEST_DATABASE_URL` in `.env` (use `127.0.0.1`, not `localhost`; on Windows `localhost` makes every connection wait about 2 s). The tests create and drop their own databases, `showwatch_test` and `showwatch_migration_test`.
