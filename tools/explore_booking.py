@@ -1,7 +1,9 @@
 """Booking-flow explorer: you navigate manually, it saves page snapshots."""
+from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-PROFILE_DIR = "browser_profile"   # persistent profile — keeps you logged in
+# persistent profile — keeps you logged in (same one the bot uses; see paths.py)
+PROFILE_DIR = Path(__file__).resolve().parent.parent / "data" / "browser_profile"
 
 
 with sync_playwright() as p:

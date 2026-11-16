@@ -3,8 +3,7 @@ import re
 from playwright.sync_api import sync_playwright
 from telegram import send_telegram
 from seat_ai import pick_seats_by_vision
-
-PROFILE_DIR = "browser_profile"
+from paths import PROFILE_DIR
 NUM_SEATS = 2
 
 

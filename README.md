@@ -69,18 +69,23 @@ HarkinsWatch/
 ├── booker.py                      # Opens a showtime's seat map and books 2 center seats (deterministic + AI fallback)
 ├── seat_ai.py                       # Gemini-vision fallback: reads the seat map as an image when clicking blind fails
 ├── telegram.py                        # Thin wrapper for sending a Telegram message
-├── explore.py                           # One-off script used to explore the Harkins site's selectors
-├── explore_booking.py                       # Manual tool: opens a real browser window, saves HTML snapshots as you click around
-├── test_setup.py                              # Sanity check that Playwright/Chromium is installed correctly
+├── paths.py                             # Single place where all data-file paths are defined
 │
-├── watchlist.json                # Movies you're waiting on (not yet Now Showing)
-├── seen_movies.json               # Cache of movies already seen in "Now Showing" (used to detect new ones)
-├── coming_soon.json                # Cache of the "Coming Soon" list
+├── data/                          # Runtime state (see data/CONTEXT.md)
+│   ├── watchlist.json               # Movies you're waiting on (not yet Now Showing)
+│   ├── seen_movies.json             # Cache of movies already seen in "Now Showing" (used to detect new ones)
+│   ├── coming_soon.json             # Cache of the "Coming Soon" list
+│   └── browser_profile/             # Persistent Chromium profile (keeps you logged into Harkins between runs)
 │
-├── browser_profile/                 # Persistent Chromium profile (keeps you logged into Harkins between runs)
-├── requirements.txt                  # Python dependencies (playwright, python-dotenv)
-├── procedure.md                       # Dev log / build notes for this project, in order
-├── .env                                 # Secrets: Telegram bot token/chat id, Gemini API key (not committed)
+├── tools/                         # Dev-only scripts, not used by the bot
+│   ├── explore.py                   # One-off script used to explore the Harkins site's selectors
+│   ├── explore_booking.py           # Manual tool: opens a real browser window, saves HTML snapshots as you click around
+│   └── test_setup.py                # Sanity check that Playwright/Chromium is installed correctly
+│
+├── docs/procedure.md              # Dev log / build notes for this project, in order
+├── CLAUDE.md, CONTEXT.md          # Orientation for AI coding agents (routing + module contracts)
+├── requirements.txt               # Python dependencies (playwright, python-dotenv)
+├── .env                           # Secrets: Telegram bot token/chat id, Gemini API key (not committed)
 └── .gitignore
 ```
 
@@ -138,7 +143,7 @@ Earlier manual run: The Odyssey (IMAX 70mm) was booked through the Gemini vision
 
 ## Setup
 
-See [procedure.md](procedure.md) for the full step-by-step history of how this was built. Short version:
+See [docs/procedure.md](docs/procedure.md) for the full step-by-step history of how this was built. Short version:
 
 ```powershell
 python -m venv venv

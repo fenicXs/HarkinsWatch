@@ -2,10 +2,7 @@
 import json
 import os
 from scraper import get_now_playing, get_coming_soon
-
-SEEN_FILE = "seen_movies.json"
-COMING_SOON_FILE = "coming_soon.json"
-WATCHLIST_FILE = "watchlist.json"
+from paths import SEEN_FILE, COMING_SOON_FILE, WATCHLIST_FILE
 
 
 def load_watchlist():

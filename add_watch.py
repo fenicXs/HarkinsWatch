@@ -3,10 +3,7 @@ import sys
 import json
 import os
 from difflib import get_close_matches
-
-WATCHLIST_FILE = "watchlist.json"
-SEEN_FILE = "seen_movies.json"
-COMING_SOON_FILE = "coming_soon.json"
+from paths import WATCHLIST_FILE, SEEN_FILE, COMING_SOON_FILE
 
 
 def load_json_list(path):
