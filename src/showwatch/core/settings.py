@@ -55,19 +55,18 @@ class Settings(BaseSettings):
 
     def require_bot(self) -> tuple[SecretStr, int]:
         """Return the bot token and admin user id, or raise if either is missing."""
-        missing = [
-            name
-            for name, value in (
-                ("TELEGRAM_BOT_TOKEN", self.telegram_bot_token),
-                ("ADMIN_TELEGRAM_USER_ID", self.admin_telegram_user_id),
-            )
-            if value is None
-        ]
-        if missing:
+        token, admin_id = self.telegram_bot_token, self.admin_telegram_user_id
+        if token is None or admin_id is None:
+            missing = [
+                name
+                for name, value in (
+                    ("TELEGRAM_BOT_TOKEN", token),
+                    ("ADMIN_TELEGRAM_USER_ID", admin_id),
+                )
+                if value is None
+            ]
             raise ValueError(f"Missing required settings for the bot: {', '.join(missing)}")
-        assert self.telegram_bot_token is not None
-        assert self.admin_telegram_user_id is not None
-        return self.telegram_bot_token, self.admin_telegram_user_id
+        return token, admin_id
 
 
 @lru_cache

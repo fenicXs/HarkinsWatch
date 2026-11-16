@@ -11,7 +11,7 @@ from showwatch.core.settings import get_settings
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # M1 points this at showwatch.db.tables.metadata.
 target_metadata = None
@@ -36,9 +36,11 @@ def _run_sync(connection: Connection) -> None:
 
 async def run_migrations_online() -> None:
     engine = create_async_engine(get_settings().database_url)
-    async with engine.connect() as connection:
-        await connection.run_sync(_run_sync)
-    await engine.dispose()
+    try:
+        async with engine.connect() as connection:
+            await connection.run_sync(_run_sync)
+    finally:
+        await engine.dispose()
 
 
 if context.is_offline_mode():

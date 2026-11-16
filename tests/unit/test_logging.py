@@ -46,6 +46,14 @@ def test_masks_known_sensitive_names() -> None:
     assert out["database_url"] == REDACTED
 
 
+def test_masks_other_common_secret_key_names() -> None:
+    out = _redact(event="x", passwd="p", apikey="k", aws_access_key="a", credentials="c", auth="b")
+    assert all(
+        out[key] == REDACTED
+        for key in ("passwd", "apikey", "aws_access_key", "credentials", "auth")
+    )
+
+
 def test_dedupe_key_is_not_masked() -> None:
     out = _redact(event="x", dedupe_key="new_release:7")
     assert out["dedupe_key"] == "new_release:7"

@@ -9,8 +9,20 @@ from typing import Any
 import structlog
 
 REDACTED = "***"
-SENSITIVE_SUFFIXES = ("token", "secret", "password", "api_key")
-SENSITIVE_NAMES = frozenset({"authorization", "cookie", "set-cookie", "dsn", "database_url"})
+SENSITIVE_SUFFIXES = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "access_key",
+    "private_key",
+    "credentials",
+)
+SENSITIVE_NAMES = frozenset(
+    {"auth", "authorization", "cookie", "set-cookie", "dsn", "database_url"}
+)
 
 # Text patterns, applied to every string value (including formatted tracebacks):
 _BOT_TOKEN_IN_URL = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
@@ -68,7 +80,8 @@ def configure_logging(level: str = "INFO") -> None:
         processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=True,
+        # Not cached: a logger first used before configure_logging must not keep the defaults.
+        cache_logger_on_first_use=False,
     )
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared,
