@@ -299,3 +299,43 @@ async def test_finishing_a_job_that_does_not_exist_is_an_error(session: AsyncSes
         await queue.fail(session, 999_999, "w1", "boom")
     with pytest.raises(LookupError):
         await queue.requeue(session, 999_999, "w1", 60)
+
+
+async def test_a_swept_job_waits_out_the_back_off_before_it_runs_again(
+    session: AsyncSession,
+) -> None:
+    ids = await _ids(session)
+    job = await queue.enqueue(
+        session, "check_chain", {}, chain_id=ids["harkins"], city_id=ids["phx"], run_after=T0
+    )
+    await queue.claim(session, "dead-worker", now=T0)
+    now = T0 + timedelta(minutes=20)
+    (swept,) = await queue.sweep(session, lock_timeout_s=900, now=now)
+    assert swept.id == job.id
+    assert swept.run_after == now + timedelta(seconds=60)  # first back-off step, not "now"
+    assert await queue.claim(session, "w2", now=now) is None  # not runnable yet
+    assert await queue.claim(session, "w2", now=now + timedelta(seconds=61)) is not None
+
+
+async def test_sweep_also_recovers_a_running_job_with_no_lock_time(session: AsyncSession) -> None:
+    ids = await _ids(session)
+    job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
+    await queue.claim(session, "w1", now=T0)
+    await session.execute(text("update jobs set locked_at = null"))  # e.g. a manual edit
+    (swept,) = await queue.sweep(session, lock_timeout_s=900, now=T0 + timedelta(minutes=1))
+    assert (swept.id, swept.status) == (job.id, "failed")  # frees the chain's slot
+
+
+async def test_claim_does_not_hide_database_errors_that_are_not_the_race(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await queue.enqueue(session, "search_showtimes", {}, run_after=T0)
+
+    async def broken_flush(*args: object, **kwargs: object) -> None:
+        raise IntegrityError(
+            "update jobs ...", {}, Exception("violates check constraint ck_jobs_status")
+        )
+
+    monkeypatch.setattr(session, "flush", broken_flush)
+    with pytest.raises(IntegrityError, match="ck_jobs_status"):
+        await queue.claim(session, "w1", now=LATER)

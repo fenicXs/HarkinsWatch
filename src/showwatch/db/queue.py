@@ -22,6 +22,7 @@ from showwatch.domain.models import Job
 Limit = Literal["chain_city", "chain"] | None
 
 MAX_CLAIM_TRIES = 20
+RUNNING_LIMIT_INDEX = "uq_jobs_running_limit"
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ async def claim(
     )
     skip: list[int] = []
     for _ in range(MAX_CLAIM_TRIES):
+        candidate_id: int | None = None
         stmt = (
             select(tables.Job)
             .where(tables.Job.status == "queued", tables.Job.run_after <= now, ~blocked)
@@ -118,8 +120,11 @@ async def claim(
                 await session.flush()
                 await session.refresh(row)
                 return Job.model_validate(row)
-        except IntegrityError:
-            # Another worker started a job for the same chain between our check and our update.
+        except IntegrityError as error:
+            # Only the running-limit index means "another worker started a job for the same
+            # chain between our check and our update". Anything else is a real error.
+            if RUNNING_LIMIT_INDEX not in str(error.orig) or candidate_id is None:
+                raise
             skip.append(candidate_id)
     return None
 
@@ -206,7 +211,7 @@ async def sweep(
 ) -> list[Job]:
     """Recover jobs whose worker died: `running` for longer than the lock timeout.
 
-    Each swept job counts as a failed attempt: it goes back to `queued`, or to `failed` with
+    Each swept job counts as a failed attempt: it goes back to `queued` (after the usual back-off), or to `failed` with
     `last_error = "worker crashed"` once it has no attempts left (a `book` job has one).
     Returns the swept jobs in their new state.
     """
@@ -215,7 +220,10 @@ async def sweep(
         select(tables.Job)
         .where(
             tables.Job.status == "running",
-            tables.Job.locked_at < now - timedelta(seconds=lock_timeout_s),
+            or_(
+                tables.Job.locked_at.is_(None),
+                tables.Job.locked_at < now - timedelta(seconds=lock_timeout_s),
+            ),
         )
         .order_by(tables.Job.id)
         .with_for_update(skip_locked=True)
@@ -226,11 +234,12 @@ async def sweep(
         row.last_error = "worker crashed"
         row.locked_by = None
         row.locked_at = None
-        if row.attempts >= row.max_attempts:
+        delay = backoff_seconds(JOB_SPECS[row.kind], row.attempts)
+        if row.attempts >= row.max_attempts or delay is None:
             row.status = "failed"
         else:
             row.status = "queued"
-            row.run_after = now
+            row.run_after = now + timedelta(seconds=delay)  # no instant retry of a crash loop
         await session.flush()
         await session.refresh(row)
         swept.append(Job.model_validate(row))
