@@ -63,6 +63,13 @@ omit = ["legacy/*"]
 
 [tool.coverage.report]
 # The 85% gate covers the logic modules; each milestone adds its own (docs/plan.md, CI).
-include = ["src/showwatch/domain/*", "src/showwatch/db/*"]
+include = [
+    "src/showwatch/domain/*",
+    "src/showwatch/db/*",
+    "src/showwatch/bot/handlers/*",
+    "src/showwatch/bot/app.py",
+    "src/showwatch/bot/keyboards.py",
+    "src/showwatch/notify.py",
+]
 fail_under = 85
 show_missing = true

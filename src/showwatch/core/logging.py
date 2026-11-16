@@ -26,7 +26,7 @@ SENSITIVE_NAMES = frozenset(
 
 # Text patterns, applied to every string value (including formatted tracebacks):
 _BOT_TOKEN_IN_URL = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
-_BARE_BOT_TOKEN = re.compile(r"\b\d{8,10}:[A-Za-z0-9_-]{35}\b")
+_BARE_BOT_TOKEN = re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b")
 _URL_CREDENTIALS = re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+@")
 
 

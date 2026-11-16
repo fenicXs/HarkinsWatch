@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from dbtools import migrate_sync, recreate_database
+from showwatch.bot.handlers import Env
+from showwatch.bot.handlers.access import ensure_admin
 from showwatch.core.settings import Settings
+from telegramfakes import FakeNotifier
 
 # Tables the tests write to. Reference tables (cities, chains, theatres) keep their seed rows.
 MUTABLE_TABLES = "alerts, signals, watch_items, showtimes, movies, jobs, chain_snapshots, users"
@@ -57,3 +60,20 @@ async def session(
 ) -> AsyncIterator[AsyncSession]:
     async with session_factory() as session:
         yield session
+
+
+# --- bot handler tests -------------------------------------------------------------------------
+
+ADMIN_ID = 1000  # Telegram user id of the admin in the handler tests
+
+
+@pytest.fixture
+def notifier() -> FakeNotifier:
+    return FakeNotifier()
+
+
+@pytest.fixture
+async def env(session_factory: async_sessionmaker[AsyncSession], notifier: FakeNotifier) -> Env:
+    env = Env(session_factory=session_factory, notifier=notifier, admin_telegram_user_id=ADMIN_ID)
+    await ensure_admin(env)
+    return env

@@ -254,8 +254,11 @@ Done when: all integration tests pass against Postgres, including "no duplicate 
 | `src/showwatch/bot/handlers/access.py` | Create | `/start`, admin approve/deny callbacks |
 | `src/showwatch/bot/handlers/watch.py` | Create | `/watch`, `/list`, `/unwatch`, `/city` |
 | `src/showwatch/notify.py` | Create | Send messages and buttons; used by bot and worker |
-| `src/showwatch/domain/title_match.py` | Create | Port of `legacy/add_watch.find_matches` |
-| `tests/unit/test_title_match.py`, `tests/unit/test_access.py`, `tests/unit/test_watch_handlers.py` | Create | Cases below |
+| `src/showwatch/domain/title_match.py` | Modify | Add the port of `legacy/add_watch.find_matches` (the file exists since M1) |
+| `src/showwatch/bot/handlers/__init__.py` | Create | `Sender` and `Env` (database session factory, notifier, admin id), shared by the handler modules (added during M2) |
+| `src/showwatch/bot/__main__.py` | Modify | Runs `app.run_polling`; logs a crash through structlog so the token is redacted (the bot no longer uses `core/lifecycle.py`) |
+| `tests/unit/test_title_match.py`, `tests/unit/test_keyboards.py`, `tests/unit/test_notify.py` | Create | Matcher, button data and notifier (no database) |
+| `tests/integration/test_access.py`, `test_watch_handlers.py`, `test_bot_app.py` | Create | Handler tests need Postgres, so they live under `integration/` (moved from `unit/`). `tests/telegramfakes.py` holds the fake notifier, a fake python-telegram-bot `Bot` and update builders; `test_bot_app.py` runs real PTB routing end to end |
 
 **Title matching.** `find_matches(query: str, titles: list[str]) -> list[str]` is a pure function; the repository supplies the titles of `movies` rows for the user's city (both statuses). It returns lowercase substring matches; only if there are none, `difflib.get_close_matches(n=5, cutoff=0.3)`; at most 5 results.
 
@@ -276,6 +279,8 @@ On startup the bot upserts the admin: `telegram_user_id = ADMIN_TELEGRAM_USER_ID
 | `/list` | none | none | The caller's rows, one line each |
 | `/unwatch` | none | Buttons `unwatch:<watch_item_id>`; the tap deletes the row | "Removed <title>" |
 | `/city` | none | Buttons `city:<code>`; the tap sets `users.current_city_id` | "City set to <name>" |
+
+**Added during M2 (not in the first plan):** `/watch` with no listed match saves a query-only watch (`movie_id` null, `stage waiting`) and says so, so a title can be watched before any chain lists it (the insider case); `/list` and `/unwatch` scope every id to the caller; any other text or an unknown command gets a one-line help message; updates from groups and channels are ignored. Without a real `TELEGRAM_BOT_TOKEN` the bot container exits (Telegram rejects the token) and Compose keeps restarting it.
 
 Tests (handlers use a fake Telegram bot and real repositories on Postgres): a callback from an unapproved user is dropped; admin approval flips `pending` to `approved`; `/list` shows only the caller's rows; `find_matches` returns substring hits alone when any exist, fuzzy hits only when there are none, and at most 5 results.
 
