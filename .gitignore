@@ -1,4 +1,11 @@
 venv/
+.venv/
+legacy/.venv/
+*.egg-info
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
 __pycache__/
 *.pyc
 .env

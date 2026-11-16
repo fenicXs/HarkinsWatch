@@ -80,16 +80,20 @@ Each chain is a module under `showwatch/chains/<code>/` that declares what it ca
 
 ```python
 class Capability(Flag):
-    WATCH = auto()      # list movies / coming-soon for a city
+    WATCH = auto()  # list movies / coming-soon for a city
     SHOWTIMES = auto()  # list sessions for a movie and date
-    SIGNALS = auto()    # report pre-opening signals for insider detection
-    BOOK = auto()       # hold seats and return a payment link
+    SIGNALS = auto()  # report pre-opening signals for insider detection
+    BOOK = auto()  # hold seats and return a payment link
+
 
 class Chain(Protocol):
     code: str
     capabilities: Capability
+
     async def list_movies(self, city: City) -> list[MovieListing]: ...
-    async def list_showtimes(self, movie: Movie, theatre: Theatre, day: date) -> list[ShowtimeListing]: ...
+    async def list_showtimes(
+        self, movie: Movie, theatre: Theatre, day: date
+    ) -> list[ShowtimeListing]: ...
     async def probe_signals(self, watch: WatchItem) -> list[Signal]: ...
     async def book(self, showtime: Showtime, seats: int) -> BookingResult: ...
 ```
@@ -170,6 +174,9 @@ Every other milestone lists its files as Path | Action (Create, Modify, Move, De
 | `src/showwatch/core/settings.py` | Create | One `Settings` class (keys below) |
 | `src/showwatch/core/logging.py` | Create | structlog JSON logging plus redaction |
 | `src/showwatch/core/db.py` | Create | Async engine and session factory |
+| `src/showwatch/core/lifecycle.py` | Create | Shared start-up for `bot` and `worker`: check the database, log `ready`, wait for SIGINT/SIGTERM (added during M0) |
+| `alembic.ini`, `migrations/env.py`, `migrations/script.py.mako`, `migrations/versions/.gitkeep` | Create | Alembic scaffold with no revisions, so the `migrate` service exits 0 (moved from M1 during M0) |
+| `tests/unit/test_docker_pin.py` | Create | Fails if the Dockerfile's `PLAYWRIGHT_VERSION` differs from the playwright pin in `pyproject.toml` (added during M0) |
 | `src/showwatch/domain/models.py` | Create | Domain types, `Capability`, the `Chain` Protocol, `CapabilityNotSupported` |
 | `src/showwatch/bot/__main__.py`, `src/showwatch/worker/__main__.py` | Create | Start, log `ready`, handle shutdown signals (no features yet) |
 | `docker/Dockerfile`, `.dockerignore` | Create | Two targets (below); ignore `.git`, `.venv`, `legacy`, `tests` |
@@ -210,7 +217,7 @@ Every other milestone lists its files as Path | Action (Create, Modify, Move, De
 - `postgres`: `postgres:18-alpine`, `POSTGRES_USER=showwatch`, `POSTGRES_DB=showwatch`, `POSTGRES_PASSWORD` from `.env`, healthcheck `pg_isready -U showwatch -d showwatch`, host port 5433, volume `showwatch_pgdata` mounted at `/var/lib/postgresql` (the path Postgres 18 images expect).
 - `migrate`: one-shot, bot image, command `alembic upgrade head`, waits for a healthy `postgres`.
 - `bot` and `worker`: `env_file: .env`, `environment: DATABASE_URL: postgresql+asyncpg://showwatch:${POSTGRES_PASSWORD}@postgres:5432/showwatch` (overrides the host-side value), `depends_on: migrate: condition: service_completed_successfully`; `worker` mounts `showwatch_profiles`.
-- profile `login`: starts `scripts/harkins_login.py` with `x11vnc` and noVNC published on `127.0.0.1:6080` only.
+- service `login` (compose profile `login`, so it never starts with `up`): runs Xvfb, `x11vnc` and noVNC published on `127.0.0.1:6080` only, then `scripts/harkins_login.py`. Defined in M0, first run in M4 (the script and the Dockerfile `COPY scripts` line arrive then).
 
 **CI.** `uv sync` → `ruff` → `mypy` → `uv run playwright install --with-deps chromium` → `pytest --cov` (a Postgres service container supplies `TEST_DATABASE_URL`; tests that need a browser carry a `browser` marker) → `docker build` of both targets without pushing. The coverage gate `--cov-fail-under=85` starts at M1 and measures the modules listed in `[tool.coverage.run]`; each milestone adds its own (M1: `domain/`, `db/`; M2: `bot/handlers/access.py`, `bot/handlers/watch.py`; M3: `worker/scheduler.py`, `chains/politeness.py`, `bot/handlers/search.py`; M4: `chains/harkins/seatmap.py`, `llm/`).
 
@@ -225,7 +232,8 @@ Done when:
 | Path | Action | Purpose |
 |---|---|---|
 | `src/showwatch/db/tables.py` | Create | SQLAlchemy tables per Appendix A |
-| `alembic.ini`, `migrations/env.py`, `migrations/script.py.mako`, `migrations/versions/0001_initial.py` | Create | Alembic setup, schema and seed rows |
+| `migrations/env.py` | Modify | Set `target_metadata` to the tables' metadata (the Alembic scaffold itself exists from M0) |
+| `migrations/versions/0001_initial.py` | Create | Schema and seed rows |
 | `src/showwatch/db/repositories/users.py`, `watches.py`, `movies.py`, `signals.py`, `alerts.py` | Create | The only code that writes SQL |
 | `src/showwatch/db/queue.py` | Create | `enqueue`, `claim(worker_id)` with `FOR UPDATE SKIP LOCKED` and the skip predicate (Appendix B), `complete`, `fail` with back-off, `requeue(delay)` (no attempt counted), `sweep()` |
 | `tests/integration/test_migrations.py`, `test_queue.py`, `test_repositories.py` | Create | Cases below |
@@ -319,7 +327,7 @@ Done when (parity test):
 
 ### M4 — Harkins booking and LLM vision
 
-1. **Pre-checks, before any porting.** (a) Does a Harkins seat hold need a logged-in profile? If yes, run `docker compose --profile login run --service-ports worker python scripts/harkins_login.py`, open `http://127.0.0.1:6080` in the browser, log in to Harkins, and press Enter in the terminal. The script saves the session in `/profiles/harkins` on `showwatch_profiles` and writes `/profiles/harkins/.login_ok` with the time (a Windows Chromium profile cannot be reused on Linux). If no login is needed, note it in `docs/decisions/`. (b) Is the RC gateway reachable from inside a container off the ASU network?
+1. **Pre-checks, before any porting.** (a) Does a Harkins seat hold need a logged-in profile? If yes, run `docker compose --profile login run --service-ports login`, open `http://127.0.0.1:6080` in the browser, log in to Harkins, and press Enter in the terminal. The script saves the session in `/profiles/harkins` on `showwatch_profiles` and writes `/profiles/harkins/.login_ok` with the time (a Windows Chromium profile cannot be reused on Linux). If no login is needed, note it in `docs/decisions/`. (b) Is the RC gateway reachable from inside a container off the ASU network?
 2. **Browser handling.** One browser context per job, closed in a `finally` block. Each chain's persistent profile lives at `/profiles/<chain code>` on the `showwatch_profiles` volume. If launching the context fails because the profile is in use, the handler calls `requeue(delay=60 s)`, which does not count as an attempt (expected only after a crashed job left the profile locked); any other failure ends the job as `failed`.
 
 | Path | Action | Purpose |

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: showwatch
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: showwatch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U showwatch -d showwatch_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://showwatch:ci@localhost:5432/showwatch_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.17"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest --cov
+
+  docker:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target bot -f docker/Dockerfile -t showwatch-bot .
+      - run: docker build --target worker -f docker/Dockerfile -t showwatch-worker .

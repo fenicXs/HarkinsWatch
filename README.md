@@ -1,4 +1,32 @@
-# HarkinsWatch
+# ShowWatch (repo: HarkinsWatch)
+
+Watches movie theatre chains, tells approved Telegram users the moment tickets open, and books seats where the chain allows it.
+
+**Revamp in progress.** The new app lives in `src/showwatch/` and follows [docs/plan.md](docs/plan.md) (milestones M0–M7). The original Harkins-only bot is kept in `legacy/` until the new one matches it (milestone M4).
+
+## Running the new stack
+
+M0 is the scaffold: Postgres, migrations (none yet), and `bot` and `worker` containers that log `ready`. Features arrive milestone by milestone.
+
+```powershell
+uv sync
+copy .env.example .env      # then fill in the keys; see .env.example
+docker compose up --build
+```
+
+Checks before every commit:
+
+```powershell
+uv run ruff check . ; uv run ruff format --check . ; uv run mypy ; uv run pytest
+```
+
+More: [docs/architecture.md](docs/architecture.md), [docs/decisions/](docs/decisions/).
+
+---
+
+## Legacy bot (now in `legacy/`)
+
+Everything below describes the original bot. Paths are relative to `legacy/`. It runs in its own venv (see "Setup (legacy bot)").
 
 A personal automation bot for Harkins Theatres (Arizona Mills). It watches for movies you care about, tells you the moment they're bookable, and books your seats for you — all from a Telegram chat.
 
@@ -61,7 +89,7 @@ Telegram chat
 ## File structure
 
 ```
-HarkinsWatch/
+legacy/
 ├── bot.py                 # Main entry point — the Telegram bot (run this)
 ├── scraper.py               # Scrapes Harkins "Now Showing"/"Coming Soon" + a movie's showtimes (with screen format)
 ├── tracker.py                 # Compares scraped movies against what's already been seen; manages the watchlist file
@@ -82,12 +110,12 @@ HarkinsWatch/
 │   ├── explore_booking.py           # Manual tool: opens a real browser window, saves HTML snapshots as you click around
 │   └── test_setup.py                # Sanity check that Playwright/Chromium is installed correctly
 │
-├── docs/procedure.md              # Dev log / build notes for this project, in order
-├── CLAUDE.md, CONTEXT.md          # Orientation for AI coding agents (routing + module contracts)
-├── requirements.txt               # Python dependencies (playwright, python-dotenv)
-├── .env                           # Secrets: Telegram bot token/chat id, Gemini API key (not committed)
-└── .gitignore
+├── CONTEXT.md                     # Module contracts for AI coding agents
+├── requirements.txt               # Python dependencies (playwright, python-dotenv, requests)
+└── .env                           # Secrets for the legacy bot: create by hand, never commit
 ```
+
+The build log of the original bot is [docs/procedure.md](docs/procedure.md) (repo root).
 
 ### Files not part of the app (debug/scratch output)
 `dump_1.html`, `dump_2.html`, `diag2.png` are one-off snapshots saved while debugging the seat map — safe to delete, they're recorded page states, not code.
@@ -141,18 +169,21 @@ Live benchmark on 2026-11-14: 10 real `book_session()` runs against next-day Ari
 
 Earlier manual run: The Odyssey (IMAX 70mm) was booked through the Gemini vision path and reached the payment page in ~45 s.
 
-## Setup
+## Setup (legacy bot)
 
 See [docs/procedure.md](docs/procedure.md) for the full step-by-step history of how this was built. Short version:
 
 ```powershell
-python -m venv venv
-venv\Scripts\Activate.ps1
+cd legacy
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-Create a `.env` file with:
+The legacy venv must not install `python-telegram-bot`: `legacy/telegram.py` would conflict with its `telegram` package.
+
+Create `legacy/.env` with:
 ```
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...

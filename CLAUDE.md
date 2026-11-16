@@ -1,6 +1,6 @@
-# HarkinsWatch — agent entry
+# ShowWatch (repo: HarkinsWatch) — agent entry
 
-Telegram bot that watches Harkins Theatres (Arizona Mills, theatre id 16) and auto-holds 2 seats, returning a payment link. Python + Playwright; Gemini vision as a seat-picking fallback.
+Watches movie theatre chains (Harkins in Phoenix; BookMyShow, District, PVR INOX in Bangalore), alerts approved Telegram users when tickets open, and books seats where a chain allows it. Python 3.12, Postgres, Playwright, Docker. Rebuild in progress: see `docs/plan.md`.
 
 This file only routes. Content lives in the files it points to.
 
@@ -8,28 +8,32 @@ This file only routes. Content lives in the files it points to.
 
 | Path | What it is |
 |---|---|
-| `bot.py` | Entry point (`python bot.py`). Telegram polling loop + button flow |
-| `scraper.py`, `tracker.py`, `add_watch.py` | Scrape Harkins; diff/cache movie lists; fuzzy title match + watchlist |
-| `booker.py`, `seat_ai.py` | Seat-map booking (DOM picker, then Gemini fallback) |
-| `telegram.py` | Standalone single-message sender |
-| `paths.py` | The only home for data-file and browser-profile paths |
-| `data/` | Runtime state (JSON caches, watchlist, browser profile) |
-| `tools/` | Dev-only scripts, never imported by the bot |
-| `docs/procedure.md` | Owner's build log, in order |
-| `README.md` | Human-facing overview, setup, benchmark results |
+| `src/showwatch/` | The new app: `core`, `domain`, `db`, `chains`, `llm`, `bot`, `worker` |
+| `migrations/`, `alembic.ini` | Alembic migrations |
+| `tests/` | `unit/`, `integration/` (needs `TEST_DATABASE_URL`), `fixtures/<chain>/` |
+| `scripts/` | Manual tools (site probes, smoke runs); never run in CI |
+| `docker/Dockerfile`, `compose.yaml` | Images (`bot`, `worker`) and the stack (`postgres`, `migrate`, `bot`, `worker`) |
+| `legacy/` | The old flat bot, runnable in its own venv until M4 deletes it. See `legacy/CONTEXT.md` |
+| `docs/plan.md` | The approved plan: milestones M0–M7, schema (Appendix A), job catalogue (Appendix B) |
+| `docs/decisions/` | One short file per decision |
+| `docs/review/` | The plan's review history |
 
 ## Where to go for task X
 
 | Task | Read first |
 |---|---|
-| Understand what a module reads/writes, or what a change hits | `CONTEXT.md` |
-| Anything touching JSON state or the login profile | `data/CONTEXT.md`, then `paths.py` |
-| Change the Telegram conversation flow | `CONTEXT.md` → bot.py section |
-| Change seat selection | `CONTEXT.md` → booker.py / seat_ai.py sections |
-| Harkins site changed (selectors broke) | `CONTEXT.md` → scraper.py section; `tools/` to re-explore |
-| Setup / run instructions | `README.md` → Setup |
+| Build or check a milestone | `docs/plan.md` → that milestone's file table and "Done when" |
+| Change the schema | `docs/plan.md` → Appendix A, then add a new migration |
+| Add or change a job kind | `docs/plan.md` → Appendix B |
+| Understand why something was chosen | `docs/decisions/` |
+| Port something from the old bot | `legacy/CONTEXT.md` |
+| Run or check the stack | `docs/architecture.md` → "Running it" |
 
 ## Conventions
 
-- New state paths go in `paths.py`; never hardcode a cwd-relative filename in a module.
-- Benchmark/status numbers live only in `README.md` → Results; don't copy them here.
+- Work happens on branch `revamp`. Never push, and never commit before the milestone's checks pass, without the user's confirmation.
+- Only public data from chain sites: no login-only endpoints, no CAPTCHA solving, no fingerprint stealth, no proxy rotation. Back off when a site pushes back.
+- Never print or commit secrets. `.env` is gitignored; `.env.example` lists key names only. Compare key names, never values.
+- Only code in `src/showwatch/db/` writes SQL. Telegram button data carries record IDs and is at most 64 bytes.
+- Benchmark and status numbers live only in `README.md` → Results.
+- Before each commit run: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`.

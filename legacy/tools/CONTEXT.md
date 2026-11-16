@@ -1,6 +1,6 @@
 # tools/ — dev-only scripts
 
-Not imported by the bot. Run from the repo root, e.g. `python tools/test_setup.py`.
+Not imported by the bot. Run from `legacy/`, e.g. `python tools/test_setup.py`.
 
 | Script | Purpose | Side effects |
 |---|---|---|
