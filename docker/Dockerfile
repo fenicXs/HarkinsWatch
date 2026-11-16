@@ -55,6 +55,8 @@ RUN useradd --create-home --uid 10001 app \
     && chown app /profiles
 USER app
 # Start a virtual display, then exec python so SIGTERM reaches it (xvfb-run would sit between
-# them and the worker's shutdown handler would never run).
+# them and the worker's shutdown handler would never run). A container that was stopped or
+# killed leaves /tmp/.X99-lock behind, and Xvfb refuses to start while it exists, so remove
+# it first, then wait (at most 5 s) for the display socket before starting python.
 ENV DISPLAY=:99
-CMD ["sh", "-c", "Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp & exec python -m showwatch.worker"]
+CMD ["sh", "-c", "rm -f /tmp/.X99-lock /tmp/.X11-unix/X99; Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp & for i in $(seq 1 50); do [ -S /tmp/.X11-unix/X99 ] && break; sleep 0.1; done; exec python -m showwatch.worker"]
