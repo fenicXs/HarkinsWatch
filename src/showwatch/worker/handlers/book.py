@@ -5,6 +5,7 @@ link, for the user to choose seats), `failed` (anything went wrong). A job that 
 completes: it has one attempt, and the user has already been told.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,6 +24,7 @@ MANUAL = "Couldn't auto-pick seats; choose {count} yourself here: {url}"
 FAILED = "Booking failed — try again."
 BUSY = "The theatre site is busy right now. Try again in a few minutes."
 STARTED = "That showtime has already started."
+BOOK_TIMEOUT_S = 600  # a hung browser must end in a reply, before the runner's own limit
 MAX_REQUEUES = 5  # a profile that stays locked would otherwise requeue the booking forever
 
 
@@ -42,6 +44,10 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
         or movie is None
         or chain_info is None
     ):
+        if user is not None and user.status == "approved":
+            await env.notifier.send(
+                user.chat_id or user.telegram_user_id, "That showtime is no longer available."
+            )
         return {"outcome": "failed", "reason": "gone"}
     chat_id = user.chat_id or user.telegram_user_id
 
@@ -54,7 +60,7 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
 
     try:
         chain = env.registry.require(chain_info.code, Capability.BOOK)
-        result = await chain.book(showtime, seats)
+        result = await asyncio.wait_for(chain.book(showtime, seats), BOOK_TIMEOUT_S)
     except RetryLater:
         if int((job.result or {}).get("requeues", 0)) >= MAX_REQUEUES:
             log.error("book_gave_up_waiting", job_id=job.id)

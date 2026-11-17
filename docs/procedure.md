@@ -1,3 +1,7 @@
+> History of the original single-file bot, deleted after M4 (last seen at git tag `legacy-last`).
+> Its `venv` and `pip install -r requirements.txt` steps no longer apply: the app now uses uv and
+> Docker (see the README).
+
 # 1. Create the virtual environment
 python -m venv venv
 

@@ -139,13 +139,15 @@ async def test_a_session_that_started_is_not_booked(
     assert notifier.to(1) == ["That showtime has already started."]
 
 
-async def test_a_user_no_longer_approved_or_a_gone_showtime_is_skipped_quietly(
+async def test_a_gone_showtime_is_told_and_a_user_no_longer_approved_is_skipped(
     worker_env: WorkerEnv, notifier: FakeNotifier, chain: FakeChain
 ) -> None:
     user_id, showtime_id = await _setup(worker_env)
     assert (await book.run(worker_env, _job(user_id, 99999)))["outcome"] == "failed"
     assert (await book.run(worker_env, _job(99999, showtime_id)))["outcome"] == "failed"
-    assert chain.book_calls == [] and notifier.sent == []
+    assert chain.book_calls == []
+    assert notifier.to(1) == ["That showtime is no longer available."]  # approved: told
+    assert notifier.sent_chats() == {1}  # the unknown user got nothing
 
 
 async def test_a_chain_that_cannot_book_is_a_failed_outcome(

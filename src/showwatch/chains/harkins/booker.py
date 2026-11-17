@@ -14,7 +14,8 @@ import structlog
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import FloatRect, Page, async_playwright
 
-from showwatch.chains.base import RetryLater
+from showwatch.chains.base import BlockedError, RetryLater
+from showwatch.chains.browser import is_blocked
 from showwatch.chains.harkins import seatmap
 from showwatch.domain.models import BookingResult
 from showwatch.llm.tasks.seat_vision import Point
@@ -51,7 +52,9 @@ VisionPicker = Callable[[bytes], Awaitable[list[Point]]]
 
 async def _open_seat_map(page: Page, url: str) -> bool:
     """Load the session page and wait until the seat map is usable."""
-    await page.goto(url)
+    response = await page.goto(url)
+    if is_blocked(response.status if response else None, await page.title()):
+        raise BlockedError(f"harkins.com stopped us on the seat page: {url}")
     try:
         await page.wait_for_selector(SEAT_BUTTON, timeout=SEAT_MAP_TIMEOUT_MS)
     except PlaywrightError:

@@ -21,6 +21,7 @@ STAGE_TEXT = {
 }
 
 NEED_CITY = "Choose your city first with /city."
+TOO_MANY = f"You're already watching {MAX_LISTED} titles. Remove one with /unwatch first."
 
 
 async def _user(session: AsyncSession, sender: Sender) -> User | None:
@@ -100,6 +101,8 @@ async def watch_for_title(session: AsyncSession, user: User, query: str) -> str:
     existing = await watches.list_for_user(session, user.id)
     if any(w.query.casefold() == query.casefold() for w in existing):
         return f"You're already watching for '{query}'."
+    if len(existing) >= MAX_LISTED:
+        return TOO_MANY
     await watches.add(session, user_id=user.id, city_id=user.current_city_id, query=query)
     return (
         f"No listed movie matches '{query}' yet. I'll keep watching for it and tell you when "
@@ -148,6 +151,8 @@ async def handle_watch_pick(env: Env, sender: Sender, movie_id: int) -> None:
             assert city is not None
             offer_dates = (movie, city.tz)
             text = ""
+        elif len(await watches.list_for_user(session, user.id)) >= MAX_LISTED:
+            text = TOO_MANY
         else:
             assert user.current_city_id is not None
             _, created = await watches.add(

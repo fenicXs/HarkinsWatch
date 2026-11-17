@@ -38,10 +38,9 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:$PATH"
-# xvfb: virtual display for headed Chromium. x11vnc + novnc + websockify: only used by the
-# `login` compose profile, so a person can log in to a site through a browser tab.
+# xvfb: a virtual display, so a normal (headed) Chromium window can run in the container.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify \
+    && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

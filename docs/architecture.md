@@ -19,7 +19,7 @@ Telegram ⇄ bot ──writes──▶ jobs table ◀──claims── worker �
 
 ## Chains
 
-Each chain (Harkins, BookMyShow, District, PVR INOX) is a module that declares what it can do: `WATCH`, `SHOWTIMES`, `SIGNALS`, `BOOK`. The bot, watchlists and alerts never know which chain they talk to. Calling something a chain cannot do raises `CapabilityNotSupported`.
+Each chain (Harkins, BookMyShow, District; PVR INOX was dropped, decision 021) is a module that declares what it can do: `WATCH`, `SHOWTIMES`, `SIGNALS`, `BOOK`. The bot, watchlists and alerts never know which chain they talk to. Calling something a chain cannot do raises `CapabilityNotSupported`.
 
 ## Insider detection
 
@@ -30,7 +30,7 @@ A watched movie moves through `listed → dates → venues → sessions`. Each n
 | What | Command |
 |---|---|
 | Start everything | `docker compose up --build` |
-| Postgres from this PC | `localhost:5433` |
+| Postgres from this PC | `127.0.0.1:5433` |
 | Checks | `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest` |
 | Old bot | deleted after M4; last seen at git tag `legacy-last` (`git show legacy-last:legacy/CONTEXT.md`) |
 

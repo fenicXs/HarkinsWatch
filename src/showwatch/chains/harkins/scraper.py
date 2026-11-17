@@ -176,12 +176,16 @@ class HarkinsChain(BaseChain):
         if seats != NUM_SEATS:
             raise ValueError(f"only {NUM_SEATS} seats can be booked, not {seats}")
         await self._politeness.before_request(self.code)
-        return await book_session(
-            showtime.booking_url,
-            profile_dir=self._profile_dir,
-            vision=self._vision,
-            seats=seats,
-        )
+        try:
+            return await book_session(
+                showtime.booking_url,
+                profile_dir=self._profile_dir,
+                vision=self._vision,
+                seats=seats,
+            )
+        except BlockedError:
+            await self._politeness.record_blocked(self.code)  # back off, as the scrapers do
+            raise
 
     async def list_movies(self, city: City) -> list[MovieListing]:
         if city.code != "phx":

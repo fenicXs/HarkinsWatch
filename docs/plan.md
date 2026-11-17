@@ -1,5 +1,7 @@
 # ShowWatch revamp plan
 
+> **Status 2026-11-17: M0 to M6 are built and pushed; M7 is closed.** This file is the plan as approved, plus an "as built" note per milestone. Where they differ, the as-built notes win. Differences that matter: PVR INOX was dropped (decision 021); BookMyShow and District are watch-only (`WATCH | SIGNALS`, not `SHOWTIMES`); the `login` service, `harkins_login.py` and `parity_check.py` do not exist; `legacy/` is deleted (git tag `legacy-last`); migrations are `0001` initial, `0002` movie tracking, `0003` Bangalore chains, `0004` parsed requests; `FAST_INTERVAL_S` is unused (Bangalore probes use `SIGNAL_INTERVAL_S`).
+
 ## Context
 
 HarkinsWatch is a ~1,260-line flat Python Telegram bot that watches one Harkins theatre (Arizona Mills) and holds 2 seats via Playwright, with Gemini vision as a fallback for canvas seat maps. The original author handed it over on 2026-11-16; the user now owns it (`github.com/fenicXs/HarkinsWatch`) and wants it rebuilt as a professionally structured, multi-city app.
@@ -49,7 +51,7 @@ Intended outcome: a new package, `showwatch`, that watches several theatre chain
 | C10 | `/watch` on a coming-soon title saves the watch only. `/watch` on an already-playing title offers dates and saves nothing, as legacy does. "Today" is the date in the city's time zone. |
 | C11 | `movies` has a `city_id` and is unique on `(chain_id, city_id, external_id)`. |
 | C12 | `jobs` has `chain_id`, `city_id`, `max_attempts` and `result` columns. |
-| C13 | The schema also has `parsed_requests` (M6, migration `0002`), `chain_snapshots.status`, `chains.blocked_until` and `users.pending_notified`. |
+| C13 | The schema also has `parsed_requests` (M6, migration `0004`), `chain_snapshots.status`, `chains.blocked_until` and `users.pending_notified`. |
 | C14 | Migrations run from a one-shot compose service `migrate`; `bot` and `worker` wait for it. |
 
 ### Hard constraints
@@ -98,7 +100,7 @@ class Chain(Protocol):
     async def book(self, showtime: Showtime, seats: int) -> BookingResult: ...
 ```
 
-Calling a method whose capability is missing raises `CapabilityNotSupported`. Harkins = WATCH | SHOWTIMES | BOOK. BookMyShow, District and PVR INOX start as WATCH | SHOWTIMES | SIGNALS.
+Calling a method whose capability is missing raises `CapabilityNotSupported`. Harkins = WATCH | SHOWTIMES | BOOK. BookMyShow and District are WATCH | SIGNALS (PVR INOX was dropped).
 
 Domain types (`domain/models.py`). Frozen dataclasses: `MovieListing(external_id, title, url, status)`; `ShowtimeListing(external_session_id, theatre_external_id, starts_at: aware datetime, format, booking_url)`; `Signal(stage, evidence: dict)`; `BookingResult(kind: Literal["held","manual"], seats: list[str], url: str)`. `City`, `Theatre`, `Movie`, `Showtime`, `WatchItem` and `User` are pydantic models mirroring the tables.
 
@@ -124,17 +126,17 @@ Telegram button data carries record IDs (for example `book:<showtime_id>`), neve
 │  ├─ core/        settings.py (pydantic-settings), logging.py, db.py (async engine/session)
 │  ├─ domain/      models.py (types, Chain Protocol, Capability, CapabilityNotSupported), title_match.py
 │  ├─ db/          tables.py (SQLAlchemy), repositories/{users,watches,movies,signals,alerts}.py, queue.py
-│  ├─ chains/      base.py, registry.py, politeness.py, harkins/{scraper,booker,seatmap}.py, bms/… (M5)
+│  ├─ chains/      base.py, registry.py, politeness.py, capabilities.py, browser.py, pages.py,
+│                harkins/{scraper,booker,seatmap}.py, bms/scraper.py, district/scraper.py
 │  ├─ llm/         client.py, tasks/{seat_vision,intent,title_match}.py
 │  ├─ notify.py    send Telegram messages/buttons (used by bot and worker)
 │  ├─ bot/         app.py, keyboards.py, handlers/{access,watch,search,freetext}.py, __main__.py
 │  └─ worker/      scheduler.py, runner.py, handlers/{check_chain,search_showtimes,book,probe_signals}.py, __main__.py
 ├─ migrations/     Alembic (alembic.ini at the repo root)
 ├─ tests/          conftest.py, unit/, integration/, fixtures/<chain>/
-├─ scripts/        explore_site.py, parity_check.py, smoke_book.py, harkins_login.py
+├─ scripts/        explore_site.py, smoke_book.py, smoke_watch.py
 ├─ docker/Dockerfile   targets: bot (python slim), worker (Playwright Python image)
 ├─ docs/           architecture.md, decisions/NNN-*.md, review/, procedure.md
-├─ legacy/         the current bot, runnable until M4, then deleted
 ├─ compose.yaml, pyproject.toml, uv.lock, .env.example, .dockerignore, CLAUDE.md, README.md
 ```
 
@@ -436,7 +438,7 @@ Stage rules (the other two stages, `dates` and `venues`, are unused for these ch
 | `src/showwatch/worker/runner.py`, `worker/__main__.py` | Modify | Register the handler and both chains |
 | `src/showwatch/core/settings.py`, `.env.example` | Modify | `SIGNAL_INTERVAL_S` |
 | `src/showwatch/db/repositories/watches.py` | Modify | Query the listed watches that need a probe |
-| `migrations/versions/0002_bangalore_chains.py` | Create | Enable `bms` and `district`; one city-wide pseudo-theatre each for `blr` (the scheduler needs a theatre row). `parsed_requests` moves to `0003` |
+| `migrations/versions/0003_bangalore_chains.py` | Create | Enable `bms` and `district`; one city-wide pseudo-theatre each for `blr` (the scheduler needs a theatre row). `parsed_requests` moves to `0004` |
 | `scripts/explore_site.py` | Modify | `--headed --chrome` options so fixtures can be captured past the headless challenge |
 | `tests/fixtures/bms/*.html`, `tests/fixtures/district/*.html` | Create | Movie list, showtimes open, showtimes closed per chain |
 | `tests/unit/test_bms_parse.py`, `test_district_parse.py` | Create | Parse fixtures; challenge page raises `BlockedError` |
@@ -460,7 +462,7 @@ Done when (replaces the "real opening" and timing lines for this milestone): fix
 
 | Path | Action | Purpose |
 |---|---|---|
-| `migrations/versions/0002_parsed_requests.py` | Create | Table `parsed_requests` (Appendix A) |
+| `migrations/versions/0004_parsed_requests.py` | Create | Table `parsed_requests` (Appendix A) |
 | `src/showwatch/bot/handlers/freetext.py` | Create | Free-text messages that are not commands |
 | `src/showwatch/llm/tasks/intent.py` | Create | Free text → `ParsedRequest` |
 | `src/showwatch/llm/tasks/title_match.py`, `src/showwatch/domain/title_match.py` | Create / Modify | LLM matching across languages and dubbed or subtitled variants; the `difflib` path stays as the offline fallback |
@@ -485,7 +487,9 @@ Done when:
 - Seats stay fixed at 2 (plan C1): a request for another count is read back with a note, and the booking flow still holds 2.
 - "Night" is 21:00 to 02:00 local time, but a show after midnight belongs to the next calendar day, so a night search shows 21:00 to 23:59 on the chosen day only.
 
-### M7 — District and PVR INOX
+### M7 — District and PVR INOX (closed 2026-11-17)
+
+District was built in M5 with BookMyShow; PVR INOX returned 403 Access Denied (decision 021) and is out of scope. The text below is the original plan.
 
 Same pattern as M5 per site: probe → decision file (`docs/decisions/020-district-probe.md`, `docs/decisions/021-pvrinox-probe.md`) → re-plan checkpoint → chain module with fixtures → live signal test.
 
@@ -519,7 +523,7 @@ Every table: `id bigint identity primary key`, `created_at timestamptz not null 
 | `alerts` | `user_id`, `dedupe_key`, `sent_at default now()` | unique `(user_id, dedupe_key)` |
 | `jobs` | `kind`, `payload jsonb`, `status default 'queued'`, `run_after default now()`, `attempts int default 0`, `max_attempts int`, `chain_id null`, `city_id null`, `locked_by null`, `locked_at null`, `last_error null`, `result jsonb null` | index `(status, run_after)`; unique partial index `uq_jobs_running_limit` on `(kind, chain_id, coalesce(city_id, 0))` where `status = 'running'` and `kind` is `check_chain`, `book` or `probe_signals` (the database-level guard behind the concurrency limits; added during M1); `status` in `queued|running|done|failed` |
 | `chain_snapshots` | `chain_id`, `city_id`, `taken_at default now()`, `movie_count int`, `status` | `status` in `good|suspect` |
-| `parsed_requests` (M6, migration `0002`) | `user_id`, `payload jsonb`, `expires_at` | none |
+| `parsed_requests` (M6, migration `0004`) | `user_id`, `payload jsonb`, `expires_at` | none |
 
 Also in `0001`: `signals.stage` is limited to `listed|dates|venues|sessions`; foreign keys delete as follows: `watch_items.user_id`, `alerts.user_id` and `signals.watch_item_id` cascade, `showtimes.movie_id` cascades, and `watch_items.movie_id` is set to null when its movie is deleted. Tests in `tests/integration/test_constraints.py` check these and every CHECK list.
 

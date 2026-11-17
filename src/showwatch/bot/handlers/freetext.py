@@ -20,7 +20,7 @@ from showwatch.bot.handlers import Env, Sender, search, watch
 from showwatch.chains.capabilities import can_search_showtimes
 from showwatch.db import queue
 from showwatch.db.repositories import catalog, movies, requests, users, watches
-from showwatch.domain.models import Movie, ParsedRequest, User
+from showwatch.domain.models import ChainInfo, Movie, ParsedRequest, User
 from showwatch.domain.title_match import match_for_watch
 from showwatch.llm.client import LLMClient
 from showwatch.llm.tasks import intent, title_match
@@ -31,6 +31,9 @@ DAYS_WITHOUT_DATE = 3  # today and the next two, when only a time of day or form
 SLOW_DOWN = "Slow down a little: try again in a minute."
 NOT_CAUGHT = "I didn't catch that. Try /watch <movie title>."
 EXPIRED = "That request expired. Send it again."
+OUT_OF_RANGE = "Showtimes are only listed for the next 7 days. Ask again for a day this week."
+STILL_LOOKING = "Still looking things up. Try again in a moment."
+MAX_OPEN_LOOKUPS = 7  # one request can ask for a week; more open lookups than that wait
 CITY_CHANGED = "You changed city since then. Send your request again."
 
 
@@ -42,6 +45,16 @@ async def _resolve(llm: LLMClient, title: str, listed: list[Movie]) -> Movie | N
         picks = await title_match.match_titles(llm, title, titles)
         chosen = picks[0] if picks else None
     return next((m for m in listed if m.title == chosen), None) if chosen else None
+
+
+def _can_search(movie: Movie | None, chain: ChainInfo | None) -> bool:
+    """Showtimes exist to search only for a movie that is on sale at a chain that lists them."""
+    return (
+        movie is not None
+        and chain is not None
+        and movie.status == "now_showing"
+        and can_search_showtimes(chain.code)
+    )
 
 
 def _days(parsed: dict[str, Any]) -> list[date]:
@@ -145,7 +158,7 @@ async def handle_text(env: Env, sender: Sender, text: str, help_text: str) -> No
     async with env.session_factory() as session, session.begin():
         await requests.purge_expired(session, env.clock())  # keeps the table small
         chain = await catalog.get_chain(session, movie.chain_id) if movie else None
-        searching = movie is not None and chain is not None and can_search_showtimes(chain.code)
+        searching = _can_search(movie, chain)
         if movie is None:
             action = "It isn't listed yet. I'll keep watching and tell you when it appears."
         elif searching:
@@ -198,7 +211,7 @@ async def _act(
     if movie is None or movie.city_id != user.current_city_id:
         return await watch.watch_for_title(session, user, payload["title"]), None
     chain = await catalog.get_chain(session, movie.chain_id)
-    if chain is None or not can_search_showtimes(chain.code):
+    if not _can_search(movie, chain):
         _, created = await watches.add(
             session,
             user_id=user.id,
@@ -213,6 +226,8 @@ async def _act(
     assert city is not None
     today = env.clock().astimezone(ZoneInfo(city.tz)).date()
     days = [d for d in _days(payload) if today <= d < today + timedelta(days=search.DAYS_OFFERED)]
+    if not days and _days(payload):
+        return OUT_OF_RANGE, None  # they named days, but none is inside the week we can see
     if not days and (payload.get("part_of_day") or payload.get("format")):
         # No date but a time of day or screen type: look at the next few days with those
         # filters, rather than a date picker that would forget them.
@@ -220,6 +235,10 @@ async def _act(
     if not days:
         return "", (movie, city.tz)  # no usable date: let them pick one
     open_jobs = await queue.open_payloads_for_user(session, "search_showtimes", user.id)
+    room = MAX_OPEN_LOOKUPS - len(open_jobs)
+    if room <= 0:
+        return STILL_LOOKING, None
+    days = days[:room]
     for day in days:
         job: dict[str, Any] = {"user_id": user.id, "movie_id": movie.id, "day": day.isoformat()}
         if payload.get("part_of_day"):

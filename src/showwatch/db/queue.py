@@ -40,6 +40,12 @@ JOB_SPECS: dict[str, JobSpec] = {
 }
 
 
+def _retry_delay(kind: str, attempts: int) -> int | None:
+    """Back-off for a failed run; None (never retried) for a kind that is no longer known."""
+    spec = JOB_SPECS.get(kind)
+    return backoff_seconds(spec, attempts) if spec is not None else None
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -218,7 +224,7 @@ async def fail(
     row.last_error = error
     row.locked_by = None
     row.locked_at = None
-    delay = backoff_seconds(JOB_SPECS[row.kind], row.attempts)
+    delay = _retry_delay(row.kind, row.attempts)
     if row.attempts >= row.max_attempts or delay is None:
         row.status = "failed"
     else:
@@ -283,7 +289,7 @@ async def sweep(
         row.last_error = "worker crashed"
         row.locked_by = None
         row.locked_at = None
-        delay = backoff_seconds(JOB_SPECS[row.kind], row.attempts)
+        delay = _retry_delay(row.kind, row.attempts)
         if row.attempts >= row.max_attempts or delay is None:
             row.status = "failed"
         else:

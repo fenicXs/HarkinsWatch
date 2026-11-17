@@ -160,3 +160,11 @@ async def test_titles_in_other_scripts_resolve_to_the_right_listed_movie(
 async def test_title_match_survives_a_model_failure_and_an_empty_list() -> None:
     assert await match_titles(FakeLLM(fail=True), "x", BMS_TITLES) == []
     assert await match_titles(FakeLLM(), "x", []) == []
+
+
+def test_a_null_seat_count_or_a_capitalised_part_of_day_still_parses() -> None:
+    parsed = intent.parse_reply(
+        '{"title": "D", "confidence": 0.9, "seats": null, "part_of_day": " Evening "}', TODAY
+    )
+    assert parsed is not None
+    assert (parsed.seats, parsed.part_of_day) == (2, "evening")

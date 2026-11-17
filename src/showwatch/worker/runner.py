@@ -54,7 +54,8 @@ async def run_one(env: WorkerEnv, worker_id: str) -> bool:
         handler = HANDLERS.get(job.kind)
         if handler is None:
             raise LookupError(f"no handler for job kind {job.kind!r}")
-        result = await handler(env, job)
+        limit = max(60, env.settings.job_lock_timeout_s - 60)  # under the sweep's limit
+        result = await asyncio.wait_for(handler(env, job), timeout=limit)
     except BlockedError as error:
         # The site pushed back. Not our failure and not an attempt: try again after the back-off.
         log.warning("job_blocked", job_id=job.id, kind=job.kind, reason=str(error))

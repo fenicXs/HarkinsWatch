@@ -87,4 +87,4 @@ The bot reads a free-text message with an LLM on the ASU RC gateway, shows what 
 | Chosen | `qwen36-35b-a3b`, fallback `gemma4-31b-it` |
 | Live, Kannada phrase "ನಾಳೆ ಸಂಜೆ ರಾಮಾಯಣ ಟಿಕೆಟ್ ಬೇಕು" in Bengaluru | read back as "Ramayana, Wed Nov 18, evening"; Confirm created the watch |
 | Live, "two tickets for Ebenezer tomorrow evening" in Phoenix | read back correctly; Confirm ran a real Harkins lookup and offered only the evening show (6:10 PM) |
-| Automated | 434 tests, 94% coverage |
+| Automated | 450 tests, 94% coverage |

@@ -13,7 +13,7 @@ from showwatch.domain.models import Job
 from showwatch.llm.tasks import intent
 from showwatch.worker.handlers import WorkerEnv, search_showtimes
 from telegramfakes import FakeNotifier
-from workerfakes import FakeChain, approved_user, listing, make_worker_env, showtime
+from workerfakes import FakeChain, add_watch, approved_user, listing, make_worker_env, showtime
 
 # 02:00 UTC on the 17th is 19:00 on the 16th in Phoenix: "today" there is Nov 16.
 CLOCK = datetime(2026, 11, 17, 2, 0, tzinfo=UTC)
@@ -33,13 +33,15 @@ def _with(env: Env, llm: FakeLLM | None) -> Env:
     return replace(env, llm=llm, clock=lambda: CLOCK)
 
 
-async def _movie(env: Env, chain: str, city: str, slug: str, title: str) -> int:
+async def _movie(
+    env: Env, chain: str, city: str, slug: str, title: str, status: str = "now_showing"
+) -> int:
     async with env.session_factory() as session, session.begin():
         found_chain = await catalog.get_chain_by_code(session, chain)
         found_city = await catalog.get_city_by_code(session, city)
         assert found_chain and found_city
         movie, _ = await movies.upsert_movie(
-            session, found_chain.id, found_city.id, listing(slug, "coming_soon", title)
+            session, found_chain.id, found_city.id, listing(slug, status, title)
         )
         return movie.id
 
@@ -185,7 +187,7 @@ async def test_a_request_for_a_bookmyshow_movie_becomes_a_watch(
     reply = '{"title": "Ramayana", "date_from": "2026-11-20", "confidence": 0.9}'
     env = _with(env, FakeLLM(intents={"ramayana friday": reply}))
     user = await approved_user(env.session_factory, 1, city="blr")
-    movie_id = await _movie(env, "bms", "blr", "ET1", "Ramayana")
+    movie_id = await _movie(env, "bms", "blr", "ET1", "Ramayana", "coming_soon")
 
     await freetext.handle_text(env, _sender(1), "ramayana friday", HELP)
     assert "message you with a link" in notifier.to(1)[0]
@@ -204,8 +206,8 @@ async def test_a_kannada_title_resolves_through_the_model(env: Env, notifier: Fa
     llm = FakeLLM(intents={kannada: reply}, matches={"ರಾಮಾಯಣ": "[2]"})
     env = _with(env, llm)
     await approved_user(env.session_factory, 1, city="blr")
-    await _movie(env, "bms", "blr", "ET9", "Scene")
-    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+    await _movie(env, "bms", "blr", "ET9", "Scene", "coming_soon")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana", "coming_soon")
 
     await freetext.handle_text(env, _sender(1), kannada, HELP)
 
@@ -218,7 +220,7 @@ async def test_a_title_nothing_lists_becomes_a_watch_for_the_words(
     reply = '{"title": "Brand New Film", "confidence": 0.9}'
     env = _with(env, FakeLLM(intents={"brand new film please": reply}))
     user = await approved_user(env.session_factory, 1, city="blr")
-    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana", "coming_soon")
 
     await freetext.handle_text(env, _sender(1), "brand new film please", HELP)
     assert "isn't listed yet" in notifier.to(1)[0]
@@ -340,7 +342,7 @@ async def test_a_watch_read_back_does_not_promise_a_day_or_time(
     )
     env = _with(env, FakeLLM(intents={"ramayana fri eve": reply}))
     await approved_user(env.session_factory, 1, city="blr")
-    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana", "coming_soon")
 
     await freetext.handle_text(env, _sender(1), "ramayana fri eve", HELP)
 
@@ -408,3 +410,115 @@ async def test_old_requests_are_purged_as_new_ones_arrive(env: Env, notifier: Fa
     await freetext.handle_text(env, _sender(1), "dune", HELP)
 
     assert await _pending_requests(env) == 1  # only the new one
+
+
+# --- final review fixes -------------------------------------------------------------------------
+
+
+async def test_a_coming_soon_harkins_title_becomes_a_watch_not_a_search(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={DUNE: DUNE_JSON}))
+    user = await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune", "coming_soon")
+
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+    assert "message you with a link" in notifier.to(1)[0]
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert await _jobs(env) == []
+    async with env.session_factory() as session:
+        assert len(await watches.list_for_user(session, user.id)) == 1
+
+
+async def test_a_date_beyond_the_week_is_said_out_loud(env: Env, notifier: FakeNotifier) -> None:
+    far = (
+        '{"title": "Dune", "date_from": "2026-12-25", "part_of_day": "evening", "confidence": 0.9}'
+    )
+    env = _with(env, FakeLLM(intents={"dune xmas": far}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "dune xmas", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1] == freetext.OUT_OF_RANGE
+    assert await _jobs(env) == []
+
+
+async def test_confirming_cannot_queue_more_than_the_open_lookup_cap(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    week = (
+        '{"title": "Dune", "date_from": "2026-11-16", "date_to": "2026-11-22", "confidence": 0.9}'
+    )
+    env = _with(env, FakeLLM(intents={"dune all week": week}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "dune all week", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+    assert len(await _jobs(env)) == 7
+
+    await freetext.handle_text(env, _sender(1), "dune all week", HELP)  # a different request id
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+    assert len(await _jobs(env)) == 7  # nothing more while those are open
+    assert notifier.to(1)[-1] == freetext.STILL_LOOKING
+
+
+async def test_a_person_cannot_watch_more_than_the_listed_maximum(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    from showwatch.bot.handlers import watch
+
+    user = await approved_user(env.session_factory, 1)
+    for n in range(watch.MAX_LISTED):
+        await add_watch(env.session_factory, user, f"film {n}")
+
+    await watch.handle_watch(env, _sender(1), "one more film nobody lists")
+
+    assert notifier.to(1)[-1] == watch.TOO_MANY
+    async with env.session_factory() as session:
+        assert len(await watches.list_for_user(session, user.id)) == watch.MAX_LISTED
+
+
+async def test_a_failed_showtime_lookup_tells_the_person_who_asked(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    from showwatch.db import queue
+
+    user = await approved_user(env.session_factory, 1)
+    movie_id = await _movie(env, "harkins", "phx", "dune", "Dune")
+    chain = FakeChain()
+    chain.error = RuntimeError("harkins.com returned HTTP 500")
+    worker = make_worker_env(env.session_factory, notifier, chain)
+    async with env.session_factory() as session, session.begin():
+        found = await movies.get(session, movie_id)
+        assert found
+        job = await queue.enqueue(
+            session,
+            "search_showtimes",
+            {"user_id": user.id, "movie_id": movie_id, "day": "2026-11-20"},
+            chain_id=found.chain_id,
+        )
+
+    result = await search_showtimes.run(worker, job)
+
+    assert result == {"failed": "RuntimeError"}
+    assert notifier.to(1) == [search_showtimes.LOOKUP_FAILED]
+
+
+async def test_the_sweep_survives_a_job_kind_that_no_longer_exists(env: Env) -> None:
+    from showwatch.db import queue
+
+    async with env.session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "insert into jobs (kind, payload, status, max_attempts, locked_by, locked_at) "
+                "values ('retired_kind', '{}', 'running', 3, 'w', now() - interval '2 hours')"
+            )
+        )
+    async with env.session_factory() as session, session.begin():
+        swept = await queue.sweep(session, 900)
+
+    assert [(j.kind, j.status) for j in swept] == [("retired_kind", "failed")]

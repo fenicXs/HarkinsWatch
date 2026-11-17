@@ -70,6 +70,10 @@ def parse_reply(text: str, today: date) -> ParsedRequest | None:
     for key in ("part_of_day", "format", "city"):
         if raw.get(key) in ("", "null", "none"):
             raw[key] = None
+    if raw.get("seats") is None:
+        raw.pop("seats", None)  # a missing count means the default
+    if isinstance(raw.get("part_of_day"), str):
+        raw["part_of_day"] = raw["part_of_day"].strip().casefold()
     if isinstance(raw.get("title"), str):
         raw["title"] = " ".join(raw["title"].split())
     try:

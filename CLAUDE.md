@@ -1,6 +1,6 @@
 # ShowWatch (repo: HarkinsWatch) — agent entry
 
-Watches movie theatre chains (Harkins in Phoenix; BookMyShow, District, PVR INOX in Bangalore), alerts approved Telegram users when tickets open, and books seats where a chain allows it. Python 3.12, Postgres, Playwright, Docker. Rebuild in progress: see `docs/plan.md`.
+Watches movie theatre chains (Harkins in Phoenix; BookMyShow, District in Bangalore), alerts approved Telegram users when tickets open, and books seats where a chain allows it. Python 3.12, Postgres, Playwright, Docker. Rebuild in progress: see `docs/plan.md`.
 
 This file only routes. Content lives in the files it points to.
 

@@ -3,12 +3,17 @@
 from datetime import date
 from typing import Any
 
+import structlog
+
 from showwatch.bot.handlers import search
 from showwatch.chains.base import BlockedError
 from showwatch.db.repositories import catalog, movies, users
 from showwatch.domain.day_parts import in_part_of_day
 from showwatch.domain.models import Capability, Job, Showtime
 from showwatch.worker.handlers import WorkerEnv
+
+log = structlog.get_logger(__name__)
+LOOKUP_FAILED = "Couldn't look up showtimes right now. Try again in a few minutes."
 
 
 def _filtered(stored: list[Showtime], payload: dict[str, Any], tz_name: str) -> list[Showtime]:
@@ -54,6 +59,10 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
             chat_id, "The theatre site is busy right now. Try again in a few minutes."
         )
         return {"blocked": True}
+    except Exception as error:  # a lookup never ends without telling the person who asked
+        log.exception("search_showtimes_failed", job_id=job.id)
+        await env.notifier.send(chat_id, LOOKUP_FAILED)
+        return {"failed": type(error).__name__}
     async with env.session_factory() as session, session.begin():
         await movies.upsert_showtimes(session, movie.id, theatre.id, listings)
         start, end = search.day_bounds(day, city.tz)
