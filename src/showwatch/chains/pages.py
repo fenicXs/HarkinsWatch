@@ -39,7 +39,7 @@ class _Collector(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style"):
-            self._skip -= 1
+            self._skip = max(0, self._skip - 1)
         if tag == "a":
             self._open = None
 

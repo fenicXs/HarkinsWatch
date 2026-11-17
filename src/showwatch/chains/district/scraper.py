@@ -34,7 +34,7 @@ def parse_movie_list(html: str) -> list[MovieListing]:
     anchors, _ = read_page(html)
     best: dict[str, tuple[bool, MovieListing]] = {}
     for anchor in anchors:
-        found = _MOVIE_HREF.search(anchor.href.split("?")[0])
+        found = _MOVIE_HREF.search(anchor.href.split("?")[0].split("#")[0].rstrip("/"))
         if found is None:
             continue
         slug, external_id = found.group(1), found.group(2).upper()
