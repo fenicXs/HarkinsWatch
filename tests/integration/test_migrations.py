@@ -64,11 +64,15 @@ async def test_migration_creates_the_tables_and_seed_rows(empty_database: str) -
     assert [tuple(r) for r in cities] == [("phx", "America/Phoenix"), ("blr", "Asia/Kolkata")]
     assert [tuple(r) for r in chains] == [
         ("harkins", True),
-        ("bms", False),
-        ("district", False),
+        ("bms", True),
+        ("district", True),
         ("pvrinox", False),
     ]
-    assert [tuple(r) for r in theatres] == [("harkins", "phx", "16", "Arizona Mills")]
+    assert sorted(tuple(r) for r in theatres) == [
+        ("bms", "blr", "blr", "BookMyShow (all Bengaluru cinemas)"),
+        ("district", "blr", "blr", "District (all Bengaluru cinemas)"),
+        ("harkins", "phx", "16", "Arizona Mills"),
+    ]
 
 
 async def test_migration_can_be_undone_and_redone(empty_database: str) -> None:

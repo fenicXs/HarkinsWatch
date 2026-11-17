@@ -113,15 +113,15 @@ async def open_payloads_for_user(
 
 
 async def last_finished_at(
-    session: AsyncSession, kind: str, *, chain_id: int, city_id: int
+    session: AsyncSession, kind: str, *, chain_id: int, city_id: int | None
 ) -> datetime | None:
-    """When the most recent job of this kind for this chain and city finished (done or failed)."""
+    """When the most recent job of this kind for this chain (and city, if any) finished."""
     return await session.scalar(
         select(func.max(tables.Job.updated_at)).where(
             tables.Job.kind == kind,
             tables.Job.status.in_(("done", "failed")),
             tables.Job.chain_id == chain_id,
-            tables.Job.city_id == city_id,
+            tables.Job.city_id.is_(None) if city_id is None else tables.Job.city_id == city_id,
         )
     )
 

@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     poll_jitter_pct: int = Field(default=20, ge=0, le=90)
     job_lock_timeout_s: int = Field(default=900, ge=60)
     chain_request_budget_per_min: int = Field(default=10, ge=1)
+    # Watch-only chains (BookMyShow, District): how often to look for opened tickets, and how
+    # the browser is run. Headed under Xvfb is the default because these sites challenge
+    # headless browsers; `signal_browser_channel` can name an installed Chrome ("chrome").
+    signal_interval_s: int = Field(default=300, ge=60)
+    signal_browser_channel: str | None = None
+    signal_headless: bool = False
 
     # Browser profiles (the worker keeps one persistent Chromium profile per chain)
     harkins_profile_dir: str = "/profiles/harkins"

@@ -123,7 +123,12 @@ async def test_a_worker_that_lost_its_job_to_a_sweep_does_not_overwrite_it(
 
 
 async def test_the_real_handlers_are_registered() -> None:
-    assert set(runner.HANDLERS) == {"check_chain", "search_showtimes", "book"}
+    assert set(runner.HANDLERS) == {
+        "check_chain",
+        "search_showtimes",
+        "book",
+        "probe_signals",
+    }
 
 
 async def test_a_real_check_chain_job_runs_end_to_end(

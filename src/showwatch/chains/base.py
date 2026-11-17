@@ -13,7 +13,6 @@ from showwatch.domain.models import (
     ShowtimeListing,
     Signal,
     Theatre,
-    WatchItem,
 )
 
 
@@ -50,7 +49,7 @@ class BaseChain:
     ) -> list[ShowtimeListing]:
         raise CapabilityNotSupported(f"{self.code} cannot list showtimes")
 
-    async def probe_signals(self, watch: WatchItem) -> list[Signal]:
+    async def probe_signals(self, movie: Movie) -> list[Signal]:
         raise CapabilityNotSupported(f"{self.code} cannot report signals")
 
     async def book(self, showtime: Showtime, seats: int) -> BookingResult:

@@ -18,10 +18,19 @@ STRIP_JS = """() => { document.querySelectorAll('script, style, noscript, svg, l
 
 
 async def probe(
-    url: str, save_to: Path | None, wait_selector: str | None, links: str | None, strip: bool
+    url: str,
+    save_to: Path | None,
+    wait_selector: str | None,
+    links: str | None,
+    strip: bool,
+    headed: bool = False,
+    chrome: bool = False,
 ) -> int:
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
+        # Some sites challenge headless browsers; a normal headed (installed) Chrome is still plain access.
+        browser = await playwright.chromium.launch(
+            headless=not headed, channel="chrome" if chrome else None
+        )
         try:
             page = await browser.new_page()
             response = await page.goto(url, wait_until="domcontentloaded")
@@ -59,11 +68,23 @@ def main() -> None:
     parser.add_argument(
         "--strip", action="store_true", help="remove scripts, styles and svg before saving"
     )
+    parser.add_argument("--headed", action="store_true", help="show the browser window")
+    parser.add_argument("--chrome", action="store_true", help="use the installed Google Chrome")
     parser.add_argument("--wait-selector", help="wait for this CSS selector instead of 5 seconds")
     parser.add_argument("--links", help="count the elements matching this CSS selector")
     args = parser.parse_args()
     raise SystemExit(
-        asyncio.run(probe(args.url, args.save_html, args.wait_selector, args.links, args.strip))
+        asyncio.run(
+            probe(
+                args.url,
+                args.save_html,
+                args.wait_selector,
+                args.links,
+                args.strip,
+                args.headed,
+                args.chrome,
+            )
+        )
     )
 
 

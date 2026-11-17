@@ -12,6 +12,8 @@ import structlog
 from telegram import Bot
 
 from showwatch import __version__
+from showwatch.chains.bms.scraper import BookMyShowChain
+from showwatch.chains.district.scraper import DistrictChain
 from showwatch.chains.harkins.scraper import HarkinsChain
 from showwatch.chains.politeness import Politeness
 from showwatch.chains.registry import ChainRegistry
@@ -40,6 +42,13 @@ async def run(settings: Settings) -> None:
         registry.register(
             HarkinsChain(politeness, profile_dir=Path(settings.harkins_profile_dir), vision=vision)
         )
+
+        browser = {
+            "channel": settings.signal_browser_channel,
+            "headless": settings.signal_headless,
+        }
+        registry.register(BookMyShowChain(politeness, **browser))  # type: ignore[arg-type]
+        registry.register(DistrictChain(politeness, **browser))  # type: ignore[arg-type]
 
         async with Bot(token.get_secret_value()) as bot:
             env = WorkerEnv(

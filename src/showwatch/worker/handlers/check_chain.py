@@ -12,7 +12,7 @@ Rules (docs/plan.md, M3):
   alert sent). A user alerted through their watch is not also sent the generic alert.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -36,7 +36,13 @@ from showwatch.worker.handlers import WorkerEnv
 # How long after a movie goes on sale a refused new-release alert is still retried.
 NEW_RELEASE_WINDOW = timedelta(hours=48)
 
+CHAIN_NAMES = {"harkins": "Harkins", "bms": "BookMyShow", "district": "District"}
+
 log = structlog.get_logger(__name__)
+
+
+def chain_label(code: str) -> str:
+    return CHAIN_NAMES.get(code, code.title())
 
 
 @dataclass(frozen=True)
@@ -45,6 +51,7 @@ class WatchEvent:
     user: User
     movie: Movie
     stage: str  # "listed" or "sessions"
+    evidence: dict[str, Any] = field(default_factory=dict)  # what the signal saw (chain, url...)
 
 
 @dataclass(frozen=True)
@@ -96,13 +103,22 @@ async def _advance_watches(
             fast_until = now + timedelta(hours=env.settings.fast_window_h)
             await watches.set_stage(session, item.id, "listed", fast_until=fast_until)
 
-    # Alerts owed: this run's transitions plus any an earlier run decided but failed to deliver.
+    return await owed_events(session, city.id, by_id)
+
+
+async def owed_events(
+    session: Any, city_id: int, by_id: dict[int, Movie] | None = None
+) -> list[WatchEvent]:
+    """Alerts owed: a stage was recorded for a watch but its alert was never delivered."""
+    if by_id is None:
+        by_id = {m.id: m for m in await movies.list_for_city(session, city_id)}
     events: list[WatchEvent] = []
-    for item, stage in await watches.unalerted_stages(session, city.id):
+    for item, stage in await watches.unalerted_stages(session, city_id):
         owner = await users.get(session, item.user_id)
         listed = by_id.get(item.movie_id) if item.movie_id is not None else None
         if owner is not None and owner.status == "approved" and listed is not None:
-            events.append(WatchEvent(item.id, owner, listed, stage))
+            evidence = await signals.evidence_for(session, item.id, stage)
+            events.append(WatchEvent(item.id, owner, listed, stage, evidence))
     return events
 
 
@@ -115,8 +131,24 @@ def _watch_alert(chain_name: str, event: WatchEvent) -> _Alert:
             "I'll tell you the moment tickets open."
         )
         return _Alert(event.user, key, text, None)
+    url = event.evidence.get("url")
+    if isinstance(url, str) and url:  # a watch-only chain: a link, not a booking flow
+        site = chain_label(str(event.evidence.get("chain") or chain_name))
+        text = f"Tickets are open for {title} on {site}! Book here: {url}"
+        return _Alert(event.user, key, text, None)
     text = f"{title} is now playing at {chain_name}! Tap to pick a showtime."
     return _Alert(event.user, key, text, keyboards.book_seats(event.movie.id))
+
+
+async def deliver_owed(env: WorkerEnv, city: City) -> int:
+    """Send the watch alerts that are owed in a city (used right after a probe finds sessions)."""
+    pending: list[_Alert] = []
+    async with env.session_factory() as session, session.begin():
+        for event in await owed_events(session, city.id):
+            owner = await catalog.get_chain(session, event.movie.chain_id)
+            name = chain_label(owner.code) if owner else "the theatre"
+            pending.append(_watch_alert(name, event))
+    return await _deliver(env, pending)
 
 
 async def process_scrape(
@@ -129,7 +161,7 @@ async def process_scrape(
 ) -> ScrapeResult:
     """Store one scrape and send the alerts it earns. Works from listings, so it needs no browser."""
     now = now or datetime.now(UTC)
-    chain_name = chain.code.title()
+    chain_name = chain_label(chain.code)
     pending: list[_Alert] = []
     async with env.session_factory() as session, session.begin():
         snapshot, first_run = await movies.record_snapshot(
@@ -152,7 +184,9 @@ async def process_scrape(
         for event in events:
             if event.movie.chain_id not in chain_names:
                 owner = await catalog.get_chain(session, event.movie.chain_id)
-                chain_names[event.movie.chain_id] = owner.code.title() if owner else "the theatre"
+                chain_names[event.movie.chain_id] = (
+                    chain_label(owner.code) if owner else "the theatre"
+                )
         pending.extend(_watch_alert(chain_names[e.movie.chain_id], e) for e in events)
 
         # New-release alerts owed, including any an earlier run decided but failed to deliver.

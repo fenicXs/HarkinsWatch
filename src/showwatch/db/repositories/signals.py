@@ -29,3 +29,13 @@ async def stages_seen(session: AsyncSession, watch_item_id: int) -> list[str]:
         .order_by(tables.Signal.id)
     )
     return list(rows)
+
+
+async def evidence_for(session: AsyncSession, watch_item_id: int, stage: str) -> dict[str, Any]:
+    """What was seen when this stage was recorded (empty if it was not)."""
+    value = await session.scalar(
+        select(tables.Signal.evidence).where(
+            tables.Signal.watch_item_id == watch_item_id, tables.Signal.stage == stage
+        )
+    )
+    return dict(value) if value else {}

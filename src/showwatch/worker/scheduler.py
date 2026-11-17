@@ -2,8 +2,8 @@
 
 Due times come from the `jobs` table (the last finished `check_chain` plus the interval), so
 they survive restarts. Jitter (±`POLL_JITTER_PCT`) is applied to `run_after` so checks do not
-land on a rigid beat. Early-signal polling (`probe_signals`) joins with the first chain that can
-report signals (M5).
+land on a rigid beat. Early-signal polling (`probe_signals`) runs for chains that report signals,
+once per chain every `SIGNAL_INTERVAL_S`, and only while someone's watch is `listed` there.
 """
 
 import asyncio
@@ -11,12 +11,13 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import structlog
 
 from showwatch.db import queue
-from showwatch.db.repositories import catalog, users
-from showwatch.domain.models import Job
+from showwatch.db.repositories import catalog, users, watches
+from showwatch.domain.models import Capability, Job
 from showwatch.worker.handlers import WorkerEnv
 
 TICK_SECONDS = 60
@@ -75,7 +76,46 @@ async def tick(
                     run_after=run_after,
                 )
                 enqueued.append((chain.code, city.code))
+        await _schedule_probes(env, session, now, rng, enqueued)
     return TickResult(enqueued=enqueued, swept=len(swept))
+
+
+async def _schedule_probes(
+    env: WorkerEnv,
+    session: Any,
+    now: datetime,
+    rng: Callable[[], float],
+    enqueued: list[tuple[str, str]],
+) -> None:
+    """Queue one `probe_signals` job per signal-capable chain that has watches to look at."""
+    listed = await watches.list_by_stage(session, ["listed"])
+    if not listed:
+        return
+    watched_cities = {item.city_id for item in listed}
+    for chain in await catalog.list_enabled_chains(session):
+        if chain.code not in env.registry.codes():
+            continue
+        if Capability.SIGNALS not in env.registry.get(chain.code).capabilities:
+            continue
+        serves = False
+        for city_id in watched_cities:
+            if await catalog.list_theatres(session, chain.id, city_id):
+                serves = True
+        if not serves:
+            continue
+        if await queue.has_open_job(session, "probe_signals", chain_id=chain.id, city_id=None):
+            continue
+        last = await queue.last_finished_at(
+            session, "probe_signals", chain_id=chain.id, city_id=None
+        )
+        run_after = now
+        if last is not None:
+            interval = jittered(env.settings.signal_interval_s, env.settings.poll_jitter_pct, rng)
+            run_after = max(now, last + timedelta(seconds=interval))
+        await queue.enqueue(
+            session, "probe_signals", {"chain": chain.code}, chain_id=chain.id, run_after=run_after
+        )
+        enqueued.append((chain.code, "signals"))
 
 
 async def _report_lost_bookings(env: WorkerEnv, swept: list[Job]) -> None:

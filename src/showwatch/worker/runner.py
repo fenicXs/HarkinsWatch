@@ -11,13 +11,20 @@ from showwatch.chains.base import BlockedError, RetryLater
 from showwatch.db import queue
 from showwatch.db.queue import JobNotOwnedError
 from showwatch.domain.models import Job
-from showwatch.worker.handlers import WorkerEnv, book, check_chain, search_showtimes
+from showwatch.worker.handlers import (
+    WorkerEnv,
+    book,
+    check_chain,
+    probe_signals,
+    search_showtimes,
+)
 
 Handler = Callable[[WorkerEnv, Job], Awaitable[dict[str, Any]]]
 
 HANDLERS: dict[str, Handler] = {
     "book": book.run,
     "check_chain": check_chain.run,
+    "probe_signals": probe_signals.run,
     "search_showtimes": search_showtimes.run,
 }
 

@@ -41,7 +41,11 @@ async def test_catalog_returns_the_seeded_rows(session: AsyncSession) -> None:
     assert await catalog.get_city(session, 999_999) is None
     assert await catalog.get_city_by_code(session, "nowhere") is None
     assert await catalog.get_chain_by_code(session, "nowhere") is None
-    assert [c.code for c in await catalog.list_enabled_chains(session)] == ["harkins"]
+    assert [c.code for c in await catalog.list_enabled_chains(session)] == [
+        "harkins",
+        "bms",
+        "district",
+    ]
     theatres = await catalog.list_theatres(session, await _harkins(session), await _phx(session))
     assert [(t.external_id, t.name) for t in theatres] == [("16", "Arizona Mills")]
     assert await catalog.list_theatres(session, await _harkins(session), cities[1].id) == []
