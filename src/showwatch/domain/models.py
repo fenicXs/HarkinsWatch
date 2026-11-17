@@ -5,11 +5,12 @@ from datetime import date, datetime
 from enum import Flag, auto
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 MovieStatus = Literal["now_showing", "coming_soon"]
 UserStatus = Literal["pending", "approved", "denied"]
 WatchStage = Literal["waiting", "listed", "dates", "venues", "sessions", "done"]
+PartOfDay = Literal["morning", "afternoon", "evening", "night"]
 
 
 class CapabilityNotSupported(Exception):
@@ -112,6 +113,21 @@ class WatchItem(_Row):
     stage: WatchStage
     fast_until: datetime | None
     format_pref: str | None
+
+
+class ParsedRequest(BaseModel):
+    """What a plain-language message asks for (from the LLM, validated; `confidence` is 0 to 1)."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    title: str = Field(min_length=1, max_length=80)
+    city: str | None = None
+    date_from: date | None = None
+    date_to: date | None = None
+    part_of_day: PartOfDay | None = None
+    format: str | None = Field(default=None, max_length=40)
+    seats: int = Field(default=2, ge=1, le=10)
+    confidence: float = Field(ge=0, le=1)
 
 
 class User(_Row):

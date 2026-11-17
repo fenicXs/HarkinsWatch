@@ -168,6 +168,16 @@ class Alert(_Common, Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ParsedRequestRow(_Common, Base):
+    """A plain-language request waiting for the user's confirm tap (expires after an hour)."""
+
+    __tablename__ = "parsed_requests"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Job(_Common, Base):
     __tablename__ = "jobs"
     __table_args__ = (

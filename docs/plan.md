@@ -475,6 +475,16 @@ Done when:
 - The live confirm-then-book step shows a booking offer for a Harkins movie that has showtimes that day.
 - A Kannada title variant and a Hindi title variant each resolve to the right BMS movie in tests.
 
+#### M6 as built: deviations
+
+- Migration is `0004_parsed_requests`. The confirm action depends on the movie's chain (owner decision 2026-11-17): a chain that lists sessions (Harkins) gets one `search_showtimes` job per day (at most 7), carrying the part of day and format as filters; a watch-only chain (BookMyShow, District) gets a watch; a title nothing lists gets a watch for the words, as `/watch` does. A request with no usable date shows the date picker.
+- Which chain can do what is read from `chains/capabilities.py` (a table checked against the chain classes by a test), because the bot never loads browser code.
+- `LLM_TEXT_*` settings fall back to the seat-vision gateway's address and key; models default to `qwen36-35b-a3b` with `gemma4-31b-it` as fallback, from the benchmark in the README.
+- Title matching tries the strict substring match first and asks the model only when that finds nothing; the model picks from a numbered list and cannot invent a title.
+- A request is single use: Confirm removes it, so a second tap says it expired. It also stops if the user changed city meanwhile.
+- Seats stay fixed at 2 (plan C1): a request for another count is read back with a note, and the booking flow still holds 2.
+- "Night" is 21:00 to 02:00 local time, but a show after midnight belongs to the next calendar day, so a night search shows 21:00 to 23:59 on the chosen day only.
+
 ### M7 — District and PVR INOX
 
 Same pattern as M5 per site: probe → decision file (`docs/decisions/020-district-probe.md`, `docs/decisions/021-pvrinox-probe.md`) → re-plan checkpoint → chain module with fixtures → live signal test.

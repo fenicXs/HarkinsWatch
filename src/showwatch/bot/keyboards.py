@@ -22,6 +22,7 @@ PICK = "pick"
 DATE = "date"
 FMT = "fmt"
 BOOK = "book"
+INTENT = "intent"
 
 MAX_LABEL = 60  # keep long movie titles from filling the screen
 
@@ -62,6 +63,11 @@ def watch_for(query: str) -> Button | None:
     if len(data.encode()) > CALLBACK_DATA_MAX_BYTES:
         return None
     return Button("None of these: keep watching for my words", data)
+
+
+def confirm_intent(request_id: int) -> Buttons:
+    """The Confirm button under a plain-language request the bot has read back."""
+    return [[Button("Confirm", callback_data(INTENT, request_id))]]
 
 
 def book_seats(movie_id: int) -> Buttons:

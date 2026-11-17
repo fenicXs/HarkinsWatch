@@ -1,0 +1,312 @@
+"""Plain-language requests end to end: message -> read-back -> Confirm -> the right action."""
+
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+
+from sqlalchemy import text
+
+from llmfakes import FakeLLM
+from showwatch.bot import keyboards
+from showwatch.bot.handlers import Env, Sender, freetext
+from showwatch.db.repositories import catalog, movies, requests, users, watches
+from showwatch.domain.models import Job
+from showwatch.llm.tasks import intent
+from showwatch.worker.handlers import WorkerEnv, search_showtimes
+from telegramfakes import FakeNotifier
+from workerfakes import FakeChain, approved_user, listing, make_worker_env, showtime
+
+# 02:00 UTC on the 17th is 19:00 on the 16th in Phoenix: "today" there is Nov 16.
+CLOCK = datetime(2026, 11, 17, 2, 0, tzinfo=UTC)
+HELP = "help text"
+DUNE = "Dune IMAX Friday evening, 2 seats"
+DUNE_JSON = (
+    '{"title": "Dune", "date_from": "2026-11-20", "date_to": "2026-11-20", '
+    '"part_of_day": "evening", "format": "IMAX", "seats": 2, "confidence": 0.95}'
+)
+
+
+def _sender(telegram_user_id: int) -> Sender:
+    return Sender(telegram_user_id=telegram_user_id, chat_id=telegram_user_id, display_name="Ann")
+
+
+def _with(env: Env, llm: FakeLLM | None) -> Env:
+    return replace(env, llm=llm, clock=lambda: CLOCK)
+
+
+async def _movie(env: Env, chain: str, city: str, slug: str, title: str) -> int:
+    async with env.session_factory() as session, session.begin():
+        found_chain = await catalog.get_chain_by_code(session, chain)
+        found_city = await catalog.get_city_by_code(session, city)
+        assert found_chain and found_city
+        movie, _ = await movies.upsert_movie(
+            session, found_chain.id, found_city.id, listing(slug, "coming_soon", title)
+        )
+        return movie.id
+
+
+async def _jobs(env: Env) -> list[dict]:  # type: ignore[type-arg]
+    async with env.session_factory() as session:
+        rows = (
+            await session.execute(
+                text("select payload from jobs where kind = 'search_showtimes' order by id")
+            )
+        ).all()
+    return [r.payload for r in rows]
+
+
+async def _pending_requests(env: Env) -> int:
+    async with env.session_factory() as session:
+        return int(await session.scalar(text("select count(*) from parsed_requests")))
+
+
+def _confirm_id(notifier: FakeNotifier, chat: int) -> int:
+    (label, data), *_ = [b for b in notifier.buttons_to(chat) if b[0] == "Confirm"][-1:]
+    parsed = keyboards.parse_callback(data)
+    assert parsed and parsed[0] == keyboards.INTENT
+    return int(parsed[1])
+
+
+# --- Phoenix: a chain that lists sessions -------------------------------------------------------
+
+
+async def test_a_request_for_a_harkins_movie_queues_filtered_showtime_searches(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={DUNE: DUNE_JSON}))
+    user = await approved_user(env.session_factory, 1)
+    movie_id = await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+
+    (message,) = notifier.to(1)
+    assert message.startswith("Dune, Fri Nov 20, evening, IMAX.")
+    assert "look up showtimes" in message
+    assert await _jobs(env) == []  # nothing is done until Confirm
+    request_id = _confirm_id(notifier, 1)
+
+    await freetext.handle_intent(env, _sender(1), request_id)
+
+    assert notifier.to(1)[-1] == "Looking up showtimes for 1 day…"
+    assert await _jobs(env) == [
+        {
+            "user_id": user.id,
+            "movie_id": movie_id,
+            "day": "2026-11-20",
+            "part_of_day": "evening",
+            "format": "IMAX",
+        }
+    ]
+    assert await _pending_requests(env) == 0
+
+
+async def test_a_date_range_queues_one_search_per_day_and_skips_duplicates(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    reply = (
+        '{"title": "Dune", "date_from": "2026-11-20", "date_to": "2026-11-22", "confidence": 0.9}'
+    )
+    env = _with(env, FakeLLM(intents={"dune weekend": reply}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    for _ in range(2):  # the same request twice: the second adds nothing
+        await freetext.handle_text(env, _sender(1), "dune weekend", HELP)
+        await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert [j["day"] for j in await _jobs(env)] == ["2026-11-20", "2026-11-21", "2026-11-22"]
+    assert all("part_of_day" not in j and "format" not in j for j in await _jobs(env))
+
+
+async def test_without_a_date_the_date_picker_is_shown(env: Env, notifier: FakeNotifier) -> None:
+    reply = '{"title": "Dune", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"dune": reply}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "dune", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1] == "Dune: pick a date."
+    assert await _jobs(env) == []
+
+
+async def test_the_worker_shows_only_the_asked_part_of_day_and_format(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={DUNE: DUNE_JSON}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    chain = FakeChain()
+    day = date(2026, 11, 20)
+    chain.showtimes = [
+        showtime("s1", 13, "IMAX", day),  # right format, afternoon
+        showtime("s2", 19, "IMAX", day),  # right format, evening
+        showtime("s3", 20, "IMAX", day),  # right format, evening
+        showtime("s4", 19, "Digital", day),  # evening, wrong format
+    ]
+    worker = make_worker_env(env.session_factory, notifier, chain)
+    async with env.session_factory() as session:
+        row = (await session.execute(text("select * from jobs limit 1"))).one()
+    job = Job.model_validate(dict(row._mapping))
+
+    result = await search_showtimes.run(worker, job)
+
+    assert result == {"showtimes": 2}
+    labels = [label for label, data in notifier.buttons_to(1) if data.startswith("book:")]
+    assert labels == ["7:00 PM", "8:00 PM"]
+
+
+async def test_when_nothing_fits_the_user_is_told(env: Env, notifier: FakeNotifier) -> None:
+    env = _with(env, FakeLLM(intents={DUNE: DUNE_JSON}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+    chain = FakeChain()
+    chain.showtimes = [showtime("s1", 13, "Digital", date(2026, 11, 20))]
+    worker = make_worker_env(env.session_factory, notifier, chain)
+    async with env.session_factory() as session:
+        row = (await session.execute(text("select * from jobs limit 1"))).one()
+
+    await search_showtimes.run(worker, Job.model_validate(dict(row._mapping)))
+
+    assert notifier.to(1)[-1] == "Nothing that day matches what you asked for."
+
+
+# --- Bangalore: a watch-only chain --------------------------------------------------------------
+
+
+async def test_a_request_for_a_bookmyshow_movie_becomes_a_watch(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    reply = '{"title": "Ramayana", "date_from": "2026-11-20", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"ramayana friday": reply}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+    movie_id = await _movie(env, "bms", "blr", "ET1", "Ramayana")
+
+    await freetext.handle_text(env, _sender(1), "ramayana friday", HELP)
+    assert "message you with a link" in notifier.to(1)[0]
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1].startswith("Watching Ramayana.")
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert (item.query, item.movie_id) == ("Ramayana", movie_id)
+    assert await _jobs(env) == []  # no showtime search for a watch-only chain
+
+
+async def test_a_kannada_title_resolves_through_the_model(env: Env, notifier: FakeNotifier) -> None:
+    kannada = "ನಾಳೆ ಸಂಜೆ ರಾಮಾಯಣ ಟಿಕೆಟ್ ಬೇಕು"
+    reply = '{"title": "ರಾಮಾಯಣ", "date_from": "2026-11-17", "confidence": 0.9}'
+    llm = FakeLLM(intents={kannada: reply}, matches={"ರಾಮಾಯಣ": "[2]"})
+    env = _with(env, llm)
+    await approved_user(env.session_factory, 1, city="blr")
+    await _movie(env, "bms", "blr", "ET9", "Scene")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+
+    await freetext.handle_text(env, _sender(1), kannada, HELP)
+
+    assert notifier.to(1)[0].startswith("Ramayana,")
+
+
+async def test_a_title_nothing_lists_becomes_a_watch_for_the_words(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    reply = '{"title": "Brand New Film", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"brand new film please": reply}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+
+    await freetext.handle_text(env, _sender(1), "brand new film please", HELP)
+    assert "isn't listed yet" in notifier.to(1)[0]
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert (item.query, item.movie_id) == ("Brand New Film", None)
+
+
+# --- guards -------------------------------------------------------------------------------------
+
+
+async def test_without_an_llm_the_help_text_is_sent(env: Env, notifier: FakeNotifier) -> None:
+    await approved_user(env.session_factory, 1)
+    await freetext.handle_text(_with(env, None), _sender(1), "dune friday", HELP)
+    assert notifier.to(1) == [HELP]
+
+
+async def test_an_unsure_or_failed_parse_asks_for_the_watch_command(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    await approved_user(env.session_factory, 1)
+    unsure = FakeLLM(intents={"hm": '{"title": "Dune", "confidence": 0.3}'})
+    await freetext.handle_text(_with(env, unsure), _sender(1), "hm", HELP)
+    await freetext.handle_text(_with(env, FakeLLM(fail=True)), _sender(1), "dune", HELP)
+    assert notifier.to(1) == [freetext.NOT_CAUGHT, freetext.NOT_CAUGHT]
+    assert await _pending_requests(env) == 0
+
+
+async def test_a_city_is_needed_first(env: Env, notifier: FakeNotifier) -> None:
+    await approved_user(env.session_factory, 1, city=None)
+    await freetext.handle_text(_with(env, FakeLLM()), _sender(1), "dune", HELP)
+    assert notifier.to(1) == ["Choose your city first with /city."]
+
+
+async def test_a_request_cannot_be_replayed_taken_over_or_used_late(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    llm = FakeLLM(intents={DUNE: DUNE_JSON})
+    env = _with(env, llm)
+    await approved_user(env.session_factory, 1)
+    await approved_user(env.session_factory, 2)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+    request_id = _confirm_id(notifier, 1)
+
+    await freetext.handle_intent(env, _sender(2), request_id)  # someone else's button
+    assert notifier.to(2) == [freetext.EXPIRED]
+    assert await _jobs(env) == []
+
+    await freetext.handle_intent(env, _sender(1), request_id)
+    await freetext.handle_intent(env, _sender(1), request_id)  # a second tap
+    assert notifier.to(1)[-1] == freetext.EXPIRED
+    assert len(await _jobs(env)) == 1
+
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)  # a fresh one, but an hour later
+    late = replace(env, clock=lambda: CLOCK + timedelta(hours=1, minutes=1))
+    await freetext.handle_intent(late, _sender(1), _confirm_id(notifier, 1))
+    assert notifier.to(1)[-1] == freetext.EXPIRED
+
+
+async def test_changing_city_before_confirming_stops_the_request(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={DUNE: DUNE_JSON}))
+    user = await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+    await freetext.handle_text(env, _sender(1), DUNE, HELP)
+    async with env.session_factory() as session, session.begin():
+        blr = await catalog.get_city_by_code(session, "blr")
+        assert blr
+        await users.set_current_city(session, user.id, blr.id)
+
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1] == freetext.CITY_CHANGED
+    assert await _jobs(env) == []
+
+
+async def test_expired_requests_can_be_purged(env: Env) -> None:
+    user = await approved_user(env.session_factory, 1)
+    async with env.session_factory() as session, session.begin():
+        await requests.create(session, user.id, {"x": 1}, CLOCK - timedelta(minutes=1))
+        await requests.create(session, user.id, {"x": 2}, CLOCK + timedelta(hours=1))
+        assert await requests.purge_expired(session, CLOCK) == 1
+
+
+def test_the_parse_module_is_wired_to_the_same_floor() -> None:
+    assert intent.CONFIDENCE_FLOOR == 0.6
+    assert WorkerEnv  # imported for typing parity with the other flow tests

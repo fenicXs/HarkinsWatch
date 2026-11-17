@@ -19,7 +19,9 @@ from telegramfakes import FakeNotifier
 from workerfakes import FakeChain, make_worker_env
 
 # Tables the tests write to. Reference tables (cities, chains, theatres) keep their seed rows.
-MUTABLE_TABLES = "alerts, signals, watch_items, showtimes, movies, jobs, chain_snapshots, users"
+MUTABLE_TABLES = (
+    "alerts, parsed_requests, signals, watch_items, showtimes, movies, jobs, chain_snapshots, users"
+)
 
 
 def _test_database_url() -> str | None:

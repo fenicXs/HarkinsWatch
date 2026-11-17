@@ -89,12 +89,12 @@ async def handle_watch(env: Env, sender: Sender, query: str) -> None:
                 text, buttons = "Which one?", rows
             else:
                 # Nothing listed matches yet: keep watching for the title (insider mode).
-                text = await _watch_for_title(session, user, query)
+                text = await watch_for_title(session, user, query)
                 buttons = None
     await env.notifier.send(sender.chat_id, text, buttons)
 
 
-async def _watch_for_title(session: AsyncSession, user: User, query: str) -> str:
+async def watch_for_title(session: AsyncSession, user: User, query: str) -> str:
     """Save a watch for a title nothing lists yet. Same words in any case count as one watch."""
     assert user.current_city_id is not None
     existing = await watches.list_for_user(session, user.id)
@@ -117,7 +117,7 @@ async def handle_watch_for(env: Env, sender: Sender, query: str) -> None:
         if not query or len(query) > MAX_QUERY_LENGTH or user.current_city_id is None:
             text = NEED_CITY if user.current_city_id is None else "Please use a shorter title."
         else:
-            text = await _watch_for_title(session, user, query)
+            text = await watch_for_title(session, user, query)
     await env.notifier.send(sender.chat_id, text)
 
 

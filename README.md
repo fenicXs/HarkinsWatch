@@ -195,6 +195,18 @@ BookMyShow and District are read through a real browser window without login (de
 | District for the same unreleased movie | lists sessions for 17 Dec already, earlier than BookMyShow |
 | End-to-end in the running worker: watch added, list check, probe | watch moved `listed` then `sessions` then `done` with no block. The Telegram send could not be checked: the database holds a placeholder admin ID (see below) |
 
+### New stack (`showwatch`), M6 plain-language requests, live runs on 2026-11-17
+
+The bot reads a free-text message with an LLM on the ASU RC gateway, shows what it understood with a Confirm button, and acts on the tap: a showtime search for Harkins (Phoenix), a watch for BookMyShow and District (Bengaluru).
+
+| Check | Result |
+|---|---|
+| Text model comparison, the plan's 5 phrases (3 English, 1 Hindi, 1 Kannada) | `qwen36-35b-a3b` 4/5 strict at about 1.5 s (the miss was only "Ramayan" for the Hindi title, which title matching handles); `gemma4-31b-it` 5/5 at about 5 s; `glm-5-3-flash` 5/5 but 7-17 s; `mistral-large-4` 3/5 at 30+ s |
+| Chosen | `qwen36-35b-a3b`, fallback `gemma4-31b-it` |
+| Live, Kannada phrase "ನಾಳೆ ಸಂಜೆ ರಾಮಾಯಣ ಟಿಕೆಟ್ ಬೇಕು" in Bengaluru | read back as "Ramayana, Wed Nov 18, evening"; Confirm created the watch |
+| Live, "two tickets for Ebenezer tomorrow evening" in Phoenix | read back correctly; Confirm ran a real Harkins lookup and offered only the evening show (6:10 PM) |
+| Automated | 434 tests, 94% coverage |
+
 ## Setup (legacy bot)
 
 See [docs/procedure.md](docs/procedure.md) for the full step-by-step history of how this was built. Short version:

@@ -6,8 +6,20 @@ from typing import Any
 from showwatch.bot.handlers import search
 from showwatch.chains.base import BlockedError
 from showwatch.db.repositories import catalog, movies, users
-from showwatch.domain.models import Capability, Job
+from showwatch.domain.day_parts import in_part_of_day
+from showwatch.domain.models import Capability, Job, Showtime
 from showwatch.worker.handlers import WorkerEnv
+
+
+def _filtered(stored: list[Showtime], payload: dict[str, Any], tz_name: str) -> list[Showtime]:
+    """Keep the sessions that fit the part of day and screen type asked for in words."""
+    part, wanted = payload.get("part_of_day"), payload.get("format")
+    shown = stored
+    if part:
+        shown = [s for s in shown if in_part_of_day(s.starts_at, part, tz_name)]
+    if wanted:
+        shown = [s for s in shown if str(wanted).casefold() in s.format.casefold()]
+    return shown
 
 
 async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
@@ -53,6 +65,10 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
             )
             if s.external_session_id in current_ids  # only what the chain returned just now
         ]
-    text, buttons = search.choices_for_day(movie, day, stored, city.tz, theatre.name)
+    shown = _filtered(stored, job.payload, city.tz)
+    if stored and not shown:
+        await env.notifier.send(chat_id, "Nothing that day matches what you asked for.")
+        return {"showtimes": 0, "filtered_out": len(stored)}
+    text, buttons = search.choices_for_day(movie, day, shown, city.tz, theatre.name)
     await env.notifier.send(chat_id, text, buttons)
-    return {"showtimes": len(stored)}
+    return {"showtimes": len(shown)}

@@ -78,6 +78,44 @@ def vision_endpoints(settings: Settings) -> list[Endpoint]:
     return found
 
 
+TEXT_MODEL_DEFAULT = "qwen36-35b-a3b"  # fast, and read Hindi and Kannada in the M6 benchmark
+TEXT_FALLBACK_MODEL_DEFAULT = "gemma4-31b-it"
+
+
+def text_endpoints(settings: Settings) -> list[Endpoint]:
+    """The text-task endpoints (intent parsing, title matching), primary first.
+
+    Unset `LLM_TEXT_*` values fall back to the seat-vision gateway's address and key, because one
+    gateway serves both; the models default to the ones the M6 benchmark chose.
+    """
+    base_url = settings.llm_text_base_url or settings.llm_vision_base_url
+    api_key = settings.llm_text_api_key or settings.llm_vision_api_key
+    found: list[Endpoint] = []
+    if base_url and api_key is not None:
+        found.append(
+            Endpoint(
+                "primary",
+                base_url,
+                settings.llm_text_model or TEXT_MODEL_DEFAULT,
+                api_key,
+                settings.llm_text_timeout_s,
+            )
+        )
+    fallback_url = settings.llm_text_fallback_base_url or base_url
+    fallback_key = settings.llm_text_fallback_api_key or api_key
+    if fallback_url and fallback_key is not None and (found or settings.llm_text_fallback_model):
+        found.append(
+            Endpoint(
+                "fallback",
+                fallback_url,
+                settings.llm_text_fallback_model or TEXT_FALLBACK_MODEL_DEFAULT,
+                fallback_key,
+                settings.llm_text_fallback_timeout_s,
+            )
+        )
+    return found
+
+
 class LLMClient:
     def __init__(
         self, endpoints: Sequence[Endpoint], *, transport: httpx.AsyncBaseTransport | None = None

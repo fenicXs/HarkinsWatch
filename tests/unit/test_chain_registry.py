@@ -41,3 +41,16 @@ async def test_a_method_a_chain_does_not_provide_refuses_loudly() -> None:
         await chain.probe_signals(None)  # type: ignore[arg-type]
     with pytest.raises(CapabilityNotSupported):
         await chain.book(None, 2)  # type: ignore[arg-type]
+
+
+def test_the_capability_table_matches_the_chain_classes() -> None:
+    from showwatch.chains.bms.scraper import BookMyShowChain
+    from showwatch.chains.capabilities import CAPABILITIES, can_search_showtimes
+    from showwatch.chains.district.scraper import DistrictChain
+    from showwatch.chains.harkins.scraper import HarkinsChain
+
+    classes = {"harkins": HarkinsChain, "bms": BookMyShowChain, "district": DistrictChain}
+    assert {code: cls.capabilities for code, cls in classes.items()} == CAPABILITIES
+    assert can_search_showtimes("harkins")
+    assert not can_search_showtimes("bms")
+    assert not can_search_showtimes("unknown")

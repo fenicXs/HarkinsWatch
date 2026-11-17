@@ -26,9 +26,10 @@ from telegram.ext import (
 
 from showwatch import __version__
 from showwatch.bot import keyboards
-from showwatch.bot.handlers import Env, Sender, access, search, watch
+from showwatch.bot.handlers import Env, Sender, access, freetext, search, watch
 from showwatch.core.db import check_connection
 from showwatch.core.settings import Settings
+from showwatch.llm.client import LLMClient, text_endpoints
 from showwatch.notify import TelegramNotifier
 
 log = structlog.get_logger(__name__)
@@ -103,6 +104,15 @@ async def _help(update: Update, context: Context) -> None:
     await _env(context).notifier.send(_sender(update).chat_id, HELP_TEXT)
 
 
+async def _text(update: Update, context: Context) -> None:
+    """Free text goes to the plain-language handler; unknown /commands get the help text."""
+    text = (update.effective_message.text or "") if update.effective_message else ""
+    if text.startswith("/"):
+        await _help(update, context)
+        return
+    await freetext.handle_text(_env(context), _sender(update), text, HELP_TEXT)
+
+
 async def _button(update: Update, context: Context) -> None:
     """Route a button tap by its `<action>:<id>` data."""
     query = update.callback_query
@@ -138,6 +148,8 @@ async def _button(update: Update, context: Context) -> None:
             await search.handle_pick(env, sender, number)
         elif action == keyboards.BOOK:
             await search.handle_book(env, sender, number)
+        elif action == keyboards.INTENT:
+            await freetext.handle_intent(env, sender, number)
 
 
 def _parse_day(text: str) -> date | None:
@@ -206,6 +218,7 @@ def build_application(
         session_factory=session_factory,
         notifier=TelegramNotifier(application.bot),
         admin_telegram_user_id=admin_id,
+        llm=LLMClient(text_endpoints(settings)),
     )
     if engine is not None:
         application.bot_data[ENGINE_KEY] = engine
@@ -217,5 +230,7 @@ def build_application(
     application.add_handler(CommandHandler("list", _list))
     application.add_handler(CommandHandler("unwatch", _unwatch))
     application.add_handler(CallbackQueryHandler(_button))
-    application.add_handler(MessageHandler(filters.TEXT, _help))  # other text and unknown commands
+    application.add_handler(
+        MessageHandler(filters.TEXT, _text)
+    )  # plain language; unknown commands get help
     return application

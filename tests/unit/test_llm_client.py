@@ -118,3 +118,39 @@ def test_endpoints_come_from_settings_primary_first_and_only_when_complete(
         ("primary", "m1", "yx"),
         ("fallback", "m2", "xy"),
     ]
+
+
+def test_text_endpoints_reuse_the_gateway_with_the_benchmarked_models() -> None:
+    from pydantic import SecretStr
+
+    from showwatch.core.settings import Settings
+    from showwatch.llm.client import text_endpoints
+
+    none = Settings(_env_file=None, database_url="postgresql+asyncpg://x")  # type: ignore[call-arg]
+    assert text_endpoints(none) == []
+
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        database_url="postgresql+asyncpg://x",
+        llm_vision_base_url="https://gw.test/v1",
+        llm_vision_api_key=SecretStr("k"),
+    )
+    primary, fallback = text_endpoints(settings)
+    assert (primary.name, primary.base_url, primary.model) == (
+        "primary",
+        "https://gw.test/v1",
+        "qwen36-35b-a3b",
+    )
+    assert (fallback.name, fallback.model) == ("fallback", "gemma4-31b-it")
+
+    own = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        database_url="postgresql+asyncpg://x",
+        llm_text_base_url="https://other.test/v1",
+        llm_text_api_key=SecretStr("k2"),
+        llm_text_model="m1",
+    )
+    assert [(e.base_url, e.model) for e in text_endpoints(own)][0] == (
+        "https://other.test/v1",
+        "m1",
+    )

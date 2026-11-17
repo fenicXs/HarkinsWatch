@@ -17,6 +17,7 @@ EXPECTED_TABLES = {
     "cities",
     "jobs",
     "movies",
+    "parsed_requests",
     "showtimes",
     "signals",
     "theatres",
