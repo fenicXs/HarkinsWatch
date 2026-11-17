@@ -10,10 +10,12 @@ from showwatch.chains.registry import ChainRegistry
 from showwatch.core.settings import Settings
 from showwatch.db.repositories import catalog, users, watches
 from showwatch.domain.models import (
+    BookingResult,
     Capability,
     City,
     Movie,
     MovieListing,
+    Showtime,
     ShowtimeListing,
     Theatre,
     User,
@@ -26,13 +28,16 @@ class FakeChain(BaseChain):
     """A chain whose answers the test sets. Records how it was called."""
 
     code = "harkins"
-    capabilities = Capability.WATCH | Capability.SHOWTIMES
+    capabilities = Capability.WATCH | Capability.SHOWTIMES | Capability.BOOK
 
     def __init__(self) -> None:
         self.movies: list[MovieListing] = []
         self.showtimes: list[ShowtimeListing] = []
         self.error: Exception | None = None
         self.showtime_calls: list[tuple[str, date]] = []
+        self.book_result = BookingResult(kind="held", seats=["I5", "I6"], url="https://pay.test/x")
+        self.book_error: Exception | None = None
+        self.book_calls: list[tuple[int, int]] = []
 
     async def list_movies(self, city: City) -> list[MovieListing]:
         if self.error:
@@ -46,6 +51,12 @@ class FakeChain(BaseChain):
             raise self.error
         self.showtime_calls.append((movie.external_id, day))
         return list(self.showtimes)
+
+    async def book(self, showtime: Showtime, seats: int) -> BookingResult:
+        self.book_calls.append((showtime.id, seats))
+        if self.book_error:
+            raise self.book_error
+        return self.book_result
 
 
 def listing(slug: str, status: str = "now_showing", title: str | None = None) -> MovieListing:

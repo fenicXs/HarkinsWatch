@@ -44,7 +44,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: bot
-    env_file: .env
+    env_file:
+      - path: .env
+      - path: .env.llm
+        required: false
     environment:
       <<: *database-url
     depends_on:
@@ -58,7 +61,10 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: worker
-    env_file: .env
+    env_file:
+      - path: .env
+      - path: .env.llm
+        required: false
     environment:
       <<: *database-url
     init: true
@@ -69,29 +75,6 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
-
-  # Log in to a site through a browser tab: `docker compose --profile login run --service-ports login`,
-  # then open http://127.0.0.1:6080. Arrives with M4 (scripts/harkins_login.py); not run before then.
-  login:
-    image: showwatch-worker
-    profiles: ["login"]
-    env_file: .env
-    environment:
-      <<: *database-url
-    init: true
-    shm_size: "1gb"
-    ports:
-      - "127.0.0.1:6080:6080"
-    volumes:
-      - showwatch_profiles:/profiles
-    command:
-      - bash
-      - -c
-      - >-
-        Xvfb :99 -screen 0 1280x1024x24 &
-        x11vnc -display :99 -forever -shared -nopw -rfbport 5900 &
-        websockify --web /usr/share/novnc 6080 localhost:5900 &
-        DISPLAY=:99 python scripts/harkins_login.py
 
 volumes:
   showwatch_pgdata:

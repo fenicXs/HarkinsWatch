@@ -169,6 +169,17 @@ Live benchmark on 2026-11-14: 10 real `book_session()` runs against next-day Ari
 
 Earlier manual run: The Odyssey (IMAX 70mm) was booked through the Gemini vision path and reached the payment page in ~45 s.
 
+### New stack (`showwatch`), M4 live runs on 2026-11-16
+
+Real `book_session()` runs through `scripts/smoke_book.py` against Arizona Mills sessions; each held 2 seats and stopped at the checkout page (no payment). The browser had no login (see `docs/decisions/022-harkins-guest-hold.md`).
+
+| Metric | Result |
+|---|---|
+| Standard screens, 5 different sessions | **5 / 5 held**, all by the seat-button picker (about 30 s per run including browser start) |
+| IMAX, 3 different sessions, vision `qwen36-35b-a3b` on the ASU RC gateway | **2 / 3 held** by vision (the third fell back to the manual seat-map link). An earlier run of the same 3 sessions with the first build held 3 / 3 |
+| Vision-only run on a standard map | 1 of 2 runs found seats before a second ask was added; held after it |
+| Vision point accuracy (first 10 points landing on a seat, one map) | `qwen36-35b-a3b` 9/10 in 4.4 s; `qwen38-27b` 8/10; `gemma4-31b-it` 4/10; `qwen3-vl-32b` and `llama4-scout-17b` returned nothing usable; `qwen36-35b-a3b` with thinking on timed out |
+
 ## Setup (legacy bot)
 
 See [docs/procedure.md](docs/procedure.md) for the full step-by-step history of how this was built. Short version:

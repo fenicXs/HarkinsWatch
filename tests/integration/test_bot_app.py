@@ -329,7 +329,7 @@ async def test_the_search_buttons_are_routed_to_the_search_handlers(
     assert bot.to(ADMIN_ID)[-1] == "Those showtimes changed. Pick the date again."
 
     await _feed(application, callback_update(4, ADMIN_ID, "book:5", name="Root"))
-    assert bot.to(ADMIN_ID)[-1] == "Booking arrives in a later update."
+    assert bot.to(ADMIN_ID)[-1] == "That showtime is no longer available."
 
 
 @pytest.mark.parametrize(

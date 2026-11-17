@@ -34,6 +34,11 @@ async def get(session: AsyncSession, movie_id: int) -> Movie | None:
     return Movie.model_validate(row) if row else None
 
 
+async def get_showtime(session: AsyncSession, showtime_id: int) -> Showtime | None:
+    row = await session.get(tables.Showtime, showtime_id)
+    return Showtime.model_validate(row) if row else None
+
+
 async def upsert_movie(
     session: AsyncSession,
     chain_id: int,

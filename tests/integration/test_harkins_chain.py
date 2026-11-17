@@ -279,7 +279,7 @@ async def test_showtimes_are_read_from_the_movies_dated_page(
 async def test_the_chain_declares_what_it_can_do() -> None:
     from showwatch.domain.models import Capability
 
-    assert HarkinsChain.capabilities == Capability.WATCH | Capability.SHOWTIMES
+    assert HarkinsChain.capabilities == Capability.WATCH | Capability.SHOWTIMES | Capability.BOOK
     assert HarkinsChain.code == "harkins"
 
 

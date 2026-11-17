@@ -5,6 +5,8 @@ import os
 import signal
 import socket
 import sys
+from functools import partial
+from pathlib import Path
 
 import structlog
 from telegram import Bot
@@ -16,6 +18,8 @@ from showwatch.chains.registry import ChainRegistry
 from showwatch.core.db import check_connection, create_engine, create_sessionmaker
 from showwatch.core.logging import configure_logging
 from showwatch.core.settings import Settings, get_settings
+from showwatch.llm.client import LLMClient, vision_endpoints
+from showwatch.llm.tasks.seat_vision import find_points
 from showwatch.notify import TelegramNotifier
 from showwatch.worker.handlers import WorkerEnv
 from showwatch.worker.runner import run_forever
@@ -31,7 +35,11 @@ async def run(settings: Settings) -> None:
         await check_connection(engine)
         politeness = Politeness(factory, settings.chain_request_budget_per_min)
         registry = ChainRegistry()
-        registry.register(HarkinsChain(politeness))
+        llm = LLMClient(vision_endpoints(settings))
+        vision = partial(find_points, llm) if llm.configured else None
+        registry.register(
+            HarkinsChain(politeness, profile_dir=Path(settings.harkins_profile_dir), vision=vision)
+        )
 
         async with Bot(token.get_secret_value()) as bot:
             env = WorkerEnv(

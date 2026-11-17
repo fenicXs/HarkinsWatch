@@ -435,6 +435,16 @@ Same pattern as M5 per site: probe → decision file (`docs/decisions/020-distri
 
 Done when: same as M5, per site.
 
+**M4 as built: deviations from the table above** (2026-11-16)
+- No login: a logged-out browser holds seats (`docs/decisions/022-harkins-guest-hold.md`), so the `login` compose service, noVNC and `scripts/harkins_login.py` were not built; step 1(a) is closed.
+- LLM keys live in a second gitignored file, `.env.llm`; `Settings` reads `.env` then `.env.llm`, and compose lists it as an optional second `env_file`. `HARKINS_PROFILE_DIR` (default `/profiles/harkins`) is a new setting.
+- The model is asked with `reasoning_effort: none` and `temperature: 0`: a thinking model answered nothing at a small token budget, and with thinking on `qwen36-35b-a3b` timed out at 60 s. Chosen model: `qwen36-35b-a3b` (see README Results).
+- Vision gets two rounds: if the first ask yields no adjacent pair of confirmed seats, ask again (the model's aim varies; one ask once put all 20 points on a wheelchair row).
+- The seat-button picker gives up after 3 failed pairs, not 2 (seats another visitor holds fail to click); a checkout page that is not reached after "Continue to Checkout" returns the manual link instead of failing.
+- `RetryLater(reason, delay_s)` (in `chains/base.py`) is how a handler asks the runner to requeue without using an attempt; the runner handles it next to `BlockedError`.
+- `booker.py` is excluded from the coverage gate (it drives the live site; `scripts/smoke_book.py` checks it by hand); `seatmap.py` and `llm/` are in the gate.
+- A `book` job swept after a worker crash is marked failed but the user is not messaged yet (the scheduler spec's "Booking failed" message for swept `book` jobs is not built): known gap.
+
 ## Appendix A — Schema
 
 Every table: `id bigint identity primary key`, `created_at timestamptz not null default now()`, `updated_at timestamptz not null default now()`. Foreign keys are `not null` unless stated. Text columns are `text`; timestamps are `timestamptz`.

@@ -21,6 +21,17 @@ class BlockedError(Exception):
     """The site refused or challenged us (HTTP 403/429 or a challenge page). Back off; never evade."""
 
 
+class RetryLater(Exception):
+    """Not a failure and not an attempt: put the job back and run it again after `delay_s`.
+
+    For example a browser profile that a crashed job left locked.
+    """
+
+    def __init__(self, reason: str, delay_s: int = 60) -> None:
+        super().__init__(reason)
+        self.delay_s = delay_s
+
+
 class BaseChain:
     """Subclass this and override the methods the chain's `capabilities` promise.
 

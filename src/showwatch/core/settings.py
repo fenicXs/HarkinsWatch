@@ -9,7 +9,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # env_ignore_empty: a blank `KEY=` line (as in .env.example) means "not set", not "".
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
+    model_config = SettingsConfigDict(
+        env_file=(".env", ".env.llm"),
+        extra="ignore",
+        env_ignore_empty=True,
+    )
 
     # Database
     database_url: str
@@ -28,6 +32,9 @@ class Settings(BaseSettings):
     poll_jitter_pct: int = Field(default=20, ge=0, le=90)
     job_lock_timeout_s: int = Field(default=900, ge=60)
     chain_request_budget_per_min: int = Field(default=10, ge=1)
+
+    # Browser profiles (the worker keeps one persistent Chromium profile per chain)
+    harkins_profile_dir: str = "/profiles/harkins"
 
     # LLM: seat-map vision (primary and one fallback)
     llm_vision_base_url: str | None = None

@@ -76,6 +76,9 @@ include = [
     "src/showwatch/worker/scheduler.py",
     "src/showwatch/worker/runner.py",
     "src/showwatch/worker/handlers/*",
+    "src/showwatch/llm/*",
 ]
+# booker.py drives a real browser on the live site; scripts/smoke_book.py checks it by hand.
+omit = ["src/showwatch/chains/harkins/booker.py"]
 fail_under = 85
 show_missing = true

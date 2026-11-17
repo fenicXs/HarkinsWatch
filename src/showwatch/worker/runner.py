@@ -7,15 +7,16 @@ from typing import Any
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from showwatch.chains.base import BlockedError
+from showwatch.chains.base import BlockedError, RetryLater
 from showwatch.db import queue
 from showwatch.db.queue import JobNotOwnedError
 from showwatch.domain.models import Job
-from showwatch.worker.handlers import WorkerEnv, check_chain, search_showtimes
+from showwatch.worker.handlers import WorkerEnv, book, check_chain, search_showtimes
 
 Handler = Callable[[WorkerEnv, Job], Awaitable[dict[str, Any]]]
 
 HANDLERS: dict[str, Handler] = {
+    "book": book.run,
     "check_chain": check_chain.run,
     "search_showtimes": search_showtimes.run,
 }
@@ -51,6 +52,10 @@ async def run_one(env: WorkerEnv, worker_id: str) -> bool:
         # The site pushed back. Not our failure and not an attempt: try again after the back-off.
         log.warning("job_blocked", job_id=job.id, kind=job.kind, reason=str(error))
         await _record(env, lambda s: queue.requeue(s, job.id, worker_id, BLOCKED_RETRY_SECONDS))
+    except RetryLater as error:
+        log.warning("job_retry_later", job_id=job.id, kind=job.kind, reason=str(error))
+        delay_s = error.delay_s
+        await _record(env, lambda s: queue.requeue(s, job.id, worker_id, delay_s))
     except Exception as error:
         log.exception("job_failed", job_id=job.id, kind=job.kind)
         message = f"{type(error).__name__}: {error}"

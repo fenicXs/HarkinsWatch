@@ -9,6 +9,7 @@ skipped; the format defaults to "Standard".
 
 import re
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -16,13 +17,16 @@ import structlog
 from playwright.async_api import Browser, Page, async_playwright
 
 from showwatch.chains.base import BaseChain, BlockedError
+from showwatch.chains.harkins.booker import NUM_SEATS, VisionPicker, book_session
 from showwatch.chains.politeness import Politeness
 from showwatch.domain.models import (
+    BookingResult,
     Capability,
     City,
     Movie,
     MovieListing,
     MovieStatus,
+    Showtime,
     ShowtimeListing,
     Theatre,
 )
@@ -155,10 +159,29 @@ async def extract_showtimes(
 
 class HarkinsChain(BaseChain):
     code = "harkins"
-    capabilities = Capability.WATCH | Capability.SHOWTIMES  # BOOK arrives with M4
+    capabilities = Capability.WATCH | Capability.SHOWTIMES | Capability.BOOK
 
-    def __init__(self, politeness: Politeness) -> None:
+    def __init__(
+        self,
+        politeness: Politeness,
+        *,
+        profile_dir: Path = Path("/profiles/harkins"),
+        vision: VisionPicker | None = None,
+    ) -> None:
         self._politeness = politeness
+        self._profile_dir = profile_dir
+        self._vision = vision
+
+    async def book(self, showtime: Showtime, seats: int) -> BookingResult:
+        if seats != NUM_SEATS:
+            raise ValueError(f"only {NUM_SEATS} seats can be booked, not {seats}")
+        await self._politeness.before_request(self.code)
+        return await book_session(
+            showtime.booking_url,
+            profile_dir=self._profile_dir,
+            vision=self._vision,
+            seats=seats,
+        )
 
     async def list_movies(self, city: City) -> list[MovieListing]:
         if city.code != "phx":

@@ -121,9 +121,74 @@ async def test_a_date_for_a_movie_the_user_cannot_see_queues_nothing(
         assert (await session.scalar(text("select count(*) from jobs"))) == 0
 
 
-async def test_the_booking_buttons_say_booking_is_coming(env: Env, notifier: FakeNotifier) -> None:
-    await search.handle_book(env, _sender(1), 5)
-    assert notifier.to(1) == ["Booking arrives in a later update."]
+async def _stored_showtime(env: Env | WorkerEnv, movie: Movie, hour: int = 20) -> int:
+    async with env.session_factory() as session, session.begin():
+        theatres = await catalog.list_theatres(session, movie.chain_id, movie.city_id)
+        await movies.upsert_showtimes(session, movie.id, theatres[0].id, [showtime("s1", hour)])
+        stored = await movies.list_showtimes(session, movie.id, theatres[0].id)
+        return stored[0].id
+
+
+async def test_a_time_tap_queues_a_booking_for_the_worker(env: Env, notifier: FakeNotifier) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    user = await approved_user(env.session_factory, 1)
+    movie = await _movie(env)
+    showtime_id = await _stored_showtime(env, movie)
+
+    await search.handle_book(clocked, _sender(1), showtime_id)
+
+    assert notifier.to(1) == ["Booking the best seats for you… hang on."]
+    async with env.session_factory() as session:
+        row = (await session.execute(text("select kind, payload, chain_id from jobs"))).one()
+    assert row.kind == "book"
+    assert row.payload == {"user_id": user.id, "showtime_id": showtime_id, "seats": 2}
+    assert row.chain_id == movie.chain_id
+
+
+async def test_a_second_booking_waits_for_the_first(env: Env, notifier: FakeNotifier) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    await approved_user(env.session_factory, 1)
+    movie = await _movie(env)
+    showtime_id = await _stored_showtime(env, movie)
+
+    await search.handle_book(clocked, _sender(1), showtime_id)
+    await search.handle_book(clocked, _sender(1), showtime_id)
+
+    assert notifier.to(1)[-1] == "Still working on your last booking. Hang on."
+    async with env.session_factory() as session:
+        assert (await session.scalar(text("select count(*) from jobs"))) == 1
+
+
+async def test_booking_a_started_session_or_an_unknown_one_queues_nothing(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    late = replace(env, clock=lambda: datetime(2026, 11, 19, tzinfo=UTC))
+    await approved_user(env.session_factory, 1)
+    movie = await _movie(env)
+    showtime_id = await _stored_showtime(env, movie)
+
+    await search.handle_book(late, _sender(1), showtime_id)
+    await search.handle_book(late, _sender(1), 99999)
+
+    assert notifier.to(1) == [
+        "That showtime has already started.",
+        "That showtime is no longer available.",
+    ]
+    async with env.session_factory() as session:
+        assert (await session.scalar(text("select count(*) from jobs"))) == 0
+
+
+async def test_booking_a_showtime_from_another_city_is_refused(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    clocked = replace(env, clock=lambda: CLOCK)
+    await approved_user(env.session_factory, 1, city="blr")
+    movie = await _movie(env)  # a Phoenix movie
+    showtime_id = await _stored_showtime(env, movie)
+
+    await search.handle_book(clocked, _sender(1), showtime_id)
+
+    assert notifier.to(1) == ["That showtime is no longer available."]
 
 
 # --- the worker side ----------------------------------------------------------------------------

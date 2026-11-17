@@ -1,4 +1,4 @@
-"""Finding a showtime: movie -> date -> (screen type) -> time. Booking itself arrives with M4.
+"""Finding a showtime: movie -> date -> (screen type) -> time. Tapping a time queues a `book` job.
 
 Every button carries record ids. Looking up showtimes is slow, so the date tap only queues a
 `search_showtimes` job; the worker answers with the format or time buttons. Tapping a format
@@ -20,6 +20,7 @@ from showwatch.notify import Buttons
 
 DAYS_OFFERED = 7
 FRESH_WINDOW = timedelta(minutes=30)  # how long a lookup's sessions count as current
+NUM_SEATS = 2  # fixed for now (plan C1)
 MAX_OPEN_SEARCHES = 3  # per user, so tapping dates cannot flood the worker with browser jobs
 NO_SHOWTIMES = "No showtimes at {theatre} that day."
 
@@ -159,5 +160,28 @@ async def handle_format(env: Env, sender: Sender, movie_id: int, day: date, code
 
 
 async def handle_book(env: Env, sender: Sender, showtime_id: int) -> None:
-    """A showtime was tapped. Booking arrives in a later update (M4)."""
-    await env.notifier.send(sender.chat_id, "Booking arrives in a later update.")
+    """A showtime was tapped: queue the booking (the worker holds the seats and replies)."""
+    async with env.session_factory() as session, session.begin():
+        user = await users.get_by_telegram_id(session, sender.telegram_user_id)
+        showtime = await movies.get_showtime(session, showtime_id)
+        movie = await movies.get(session, showtime.movie_id) if showtime else None
+        if (
+            user is None
+            or user.status != "approved"
+            or user.current_city_id is None
+            or showtime is None
+            or movie is None
+            or movie.city_id != user.current_city_id
+        ):
+            text = "That showtime is no longer available."
+        elif showtime.starts_at <= env.clock():
+            text = "That showtime has already started."
+        else:
+            payload = {"user_id": user.id, "showtime_id": showtime.id, "seats": NUM_SEATS}
+            open_jobs = await queue.open_payloads_for_user(session, "book", user.id)
+            if open_jobs:  # one booking at a time per person: a hold takes a minute or two
+                text = "Still working on your last booking. Hang on."
+            else:
+                await queue.enqueue(session, "book", payload, chain_id=movie.chain_id)
+                text = "Booking the best seats for you… hang on."
+    await env.notifier.send(sender.chat_id, text)
