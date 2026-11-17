@@ -1,6 +1,5 @@
 venv/
 .venv/
-legacy/.venv/
 *.egg-info
 .mypy_cache/
 .pytest_cache/

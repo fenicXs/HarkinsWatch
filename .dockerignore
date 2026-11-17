@@ -1,6 +1,5 @@
 .git
 .venv
-legacy
 tests
 docs
 __pycache__

@@ -13,7 +13,6 @@ This file only routes. Content lives in the files it points to.
 | `tests/` | `unit/`, `integration/` (needs `TEST_DATABASE_URL`), `fixtures/<chain>/` |
 | `scripts/` | Manual tools (site probes, smoke runs); never run in CI |
 | `docker/Dockerfile`, `compose.yaml` | Images (`bot`, `worker`) and the stack (`postgres`, `migrate`, `bot`, `worker`) |
-| `legacy/` | The old flat bot, runnable in its own venv until M4 deletes it. See `legacy/CONTEXT.md` |
 | `docs/plan.md` | The approved plan: milestones M0–M7, schema (Appendix A), job catalogue (Appendix B) |
 | `docs/decisions/` | One short file per decision |
 | `docs/review/` | The plan's review history |
@@ -26,7 +25,7 @@ This file only routes. Content lives in the files it points to.
 | Change the schema | `docs/plan.md` → Appendix A, then add a new migration |
 | Add or change a job kind | `docs/plan.md` → Appendix B |
 | Understand why something was chosen | `docs/decisions/` |
-| Port something from the old bot | `legacy/CONTEXT.md` |
+| Look at the old flat bot | `git show legacy-last:legacy/CONTEXT.md` (tag `legacy-last`, last commit that had it) |
 | Run or check the stack | `docs/architecture.md` → "Running it" |
 
 ## Conventions

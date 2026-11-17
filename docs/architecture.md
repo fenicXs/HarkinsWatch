@@ -32,7 +32,7 @@ A watched movie moves through `listed → dates → venues → sessions`. Each n
 | Start everything | `docker compose up --build` |
 | Postgres from this PC | `localhost:5433` |
 | Checks | `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest` |
-| Old bot | see `legacy/CONTEXT.md`; runs in its own venv |
+| Old bot | deleted after M4; last seen at git tag `legacy-last` (`git show legacy-last:legacy/CONTEXT.md`) |
 
 ## Where to look
 
