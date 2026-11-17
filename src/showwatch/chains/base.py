@@ -2,6 +2,7 @@
 
 from datetime import date
 
+from showwatch.domain.formats import FormatPref
 from showwatch.domain.models import (
     BookingResult,
     Capability,
@@ -49,7 +50,7 @@ class BaseChain:
     ) -> list[ShowtimeListing]:
         raise CapabilityNotSupported(f"{self.code} cannot list showtimes")
 
-    async def probe_signals(self, movie: Movie) -> list[Signal]:
+    async def probe_signals(self, movie: Movie, pref: FormatPref | None = None) -> list[Signal]:
         raise CapabilityNotSupported(f"{self.code} cannot report signals")
 
     async def book(self, showtime: Showtime, seats: int) -> BookingResult:

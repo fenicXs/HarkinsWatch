@@ -109,3 +109,44 @@ def test_district_page_without_times_is_not_open() -> None:
 )
 def test_is_blocked(status: int | None, title: str, blocked: bool) -> None:
     assert is_blocked(status, title) is blocked
+
+
+# --- formats ----------------------------------------------------------------------------------
+
+
+def test_bms_page_state_lists_the_formats_of_a_movie() -> None:
+    # Saved from the real page; "MS - Infinity Vision" is added in the same shape, for the day a
+    # plain Infinity Vision page exists.
+    entries = bms.parse_format_entries(_html("bms/format_selector_plain.html"))
+    assert [(e.label, e.code) for e in entries] == [
+        ("2D", "ET00439706"),
+        ("MS-Infinity Vsn 3d", "ET00526306"),
+        ("MS - Infinity Vision", "ET00999999"),
+    ]
+    assert {e.language for e in entries} == {"English"}  # "Select all" is not a format
+
+
+def test_a_page_without_state_has_no_formats() -> None:
+    assert bms.parse_format_entries("<html><body>nothing</body></html>") == []
+    assert bms.parse_format_entries("<script>window.__INITIAL_STATE__ = {broken</script>") == []
+    assert bms.page_format("<html></html>") == ""
+
+
+def test_district_sessions_carry_their_format() -> None:
+    counts = district.extract_screenings(_html("district/screenings_3d.html"))
+    assert dict(counts) == {"MS INFINITY VISION 3D": 40}
+
+
+def test_district_mixed_formats_are_counted_apart() -> None:
+    counts = district.extract_screenings(_html("district/screenings_mixed.html"))
+    assert set(counts) == {"2D", "MS INFINITY VISION", "MS INFINITY VISION 3D"}
+    assert sum(counts.values()) == 40
+
+
+def test_district_records_that_are_not_sessions_or_not_json_are_ignored() -> None:
+    page = (
+        '<script type="application/ld+json">{"@type": "Movie", "name": "X"}</script>'
+        '<script type="application/ld+json">{oops</script>'
+        '<script type="application/ld+json">[{"@type": "ScreeningEvent", "name": "X (2D)"}]</script>'
+    )
+    assert dict(district.extract_screenings(page)) == {"2D": 1}

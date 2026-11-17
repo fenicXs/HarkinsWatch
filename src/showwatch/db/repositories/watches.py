@@ -2,8 +2,9 @@
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Text, and_, cast, delete, literal, select
+from sqlalchemy import Text, and_, case, cast, delete, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -122,7 +123,19 @@ async def set_stage(
     return WatchItem.model_validate(row)
 
 
-async def unalerted_stages(session: AsyncSession, city_id: int) -> list[tuple[WatchItem, str]]:
+async def set_format_pref(
+    session: AsyncSession, watch_item_id: int, format_pref: str | None
+) -> None:
+    row = await session.get(tables.WatchItem, watch_item_id)
+    if row is None:
+        raise LookupError(f"watch item {watch_item_id} not found")
+    row.format_pref = format_pref
+    await session.flush()
+
+
+async def unalerted_stages(
+    session: AsyncSession, city_id: int
+) -> list[tuple[WatchItem, str, str, dict[str, Any]]]:
     """Watch alerts still owed: a recorded signal whose alert has not been delivered.
 
     Deciding an alert and delivering it are separate steps, and Telegram can refuse a message,
@@ -134,9 +147,10 @@ async def unalerted_stages(session: AsyncSession, city_id: int) -> list[tuple[Wa
         + cast(tables.WatchItem.id, Text)
         + literal(":")
         + tables.Signal.stage
+        + case((tables.Signal.source != "", literal(":") + tables.Signal.source), else_=literal(""))
     )
     rows = await session.execute(
-        select(tables.WatchItem, tables.Signal.stage)
+        select(tables.WatchItem, tables.Signal.stage, tables.Signal.source, tables.Signal.evidence)
         .join(tables.Signal, tables.Signal.watch_item_id == tables.WatchItem.id)
         .outerjoin(
             tables.Alert,
@@ -152,6 +166,9 @@ async def unalerted_stages(session: AsyncSession, city_id: int) -> list[tuple[Wa
         )
         .order_by(tables.WatchItem.id, tables.Signal.id)
     )
-    owed = [(WatchItem.model_validate(item), stage) for item, stage in rows.all()]
-    on_sale = {item.id for item, stage in owed if stage == "sessions"}
-    return [(item, stage) for item, stage in owed if not (stage == "listed" and item.id in on_sale)]
+    owed = [
+        (WatchItem.model_validate(item), stage, source, dict(evidence))
+        for item, stage, source, evidence in rows.all()
+    ]
+    on_sale = {item.id for item, stage, _, _ in owed if stage == "sessions"}
+    return [o for o in owed if not (o[1] == "listed" and o[0].id in on_sale)]

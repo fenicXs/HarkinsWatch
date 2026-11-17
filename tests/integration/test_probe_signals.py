@@ -1,17 +1,20 @@
 """probe_signals and its scheduling: the listed -> sessions stages for a watch-only chain."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from llmfakes import FakeLLM
 from showwatch.chains.base import BaseChain, BlockedError
 from showwatch.chains.politeness import Politeness
 from showwatch.chains.registry import ChainRegistry
 from showwatch.core.settings import Settings
 from showwatch.db import queue
 from showwatch.db.repositories import catalog, signals, watches
+from showwatch.domain.formats import FormatPref
 from showwatch.domain.models import Capability, City, Job, Movie, MovieListing, Signal
 from showwatch.worker.handlers import WorkerEnv, check_chain, probe_signals
 from showwatch.worker.scheduler import tick
@@ -35,16 +38,22 @@ class FakeSignalChain(BaseChain):
         self.opened: set[str] = set()
         self.error: Exception | None = None
         self.probed: list[str] = []
+        self.formats: list[dict] | None = None  # type: ignore[type-arg]
+        self.prefs: list[object] = []
 
     async def list_movies(self, city: City) -> list[MovieListing]:
         return list(self.movies)
 
-    async def probe_signals(self, movie: Movie) -> list[Signal]:
+    async def probe_signals(self, movie: Movie, pref: object = None) -> list[Signal]:
         if self.error:
             raise self.error
         self.probed.append(movie.external_id)
+        self.prefs.append(pref)
         if movie.external_id in self.opened:
-            return [Signal("sessions", {"url": TICKETS, "showtimes": 12})]
+            evidence: dict = {"url": TICKETS, "showtimes": 12}  # type: ignore[type-arg]
+            if self.formats is not None:
+                evidence["formats"] = self.formats
+            return [Signal("sessions", evidence)]
         return []
 
 
@@ -175,23 +184,6 @@ async def test_each_watcher_of_the_movie_is_alerted_once(
     assert sum("Tickets are open" in m for m in notifier.to(2)) == 1
 
 
-async def test_the_first_chain_to_open_wins_and_names_itself(
-    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
-) -> None:
-    env, _, watch_id = setup  # the watch is attached to a BookMyShow movie
-    district = FakeSignalChain("district")
-    env.registry.register(district)  # type: ignore[arg-type]
-    async with env.session_factory() as session, session.begin():
-        await session.execute(text("update chains set enabled = true where code = 'district'"))
-    await _list_in_bangalore(env, district)
-    district.opened.add("ET00000001")
-
-    await probe_signals.run(env, await _probe_job(env, "district"))
-
-    assert await _stage(env, watch_id) == "done"
-    assert notifier.to(1)[-1].startswith("Tickets are open for Dune Part Three on District!")
-
-
 async def test_a_block_propagates_so_the_runner_can_back_off(
     setup: tuple[WorkerEnv, FakeSignalChain, int],
 ) -> None:
@@ -270,10 +262,10 @@ async def test_one_broken_page_does_not_stop_the_other_movies_or_their_alerts(
     chain.opened.add("ET00000002")
     original = chain.probe_signals
 
-    async def flaky(movie: Movie) -> list[Signal]:
+    async def flaky(movie: Movie, pref: object = None) -> list[Signal]:
         if movie.external_id == "ET00000001":
             raise RuntimeError("HTTP 500")
-        return await original(movie)
+        return await original(movie, pref)
 
     chain.probe_signals = flaky  # type: ignore[method-assign]
     result = await probe_signals.run(env, await _probe_job(env))
@@ -281,3 +273,118 @@ async def test_one_broken_page_does_not_stop_the_other_movies_or_their_alerts(
     assert result == {"probed": 1, "opened": 1}
     assert await _stage(env, watch_id) == "listed"  # the broken one is tried again next time
     assert any("Tickets are open for Other Film" in m for m in notifier.to(2))
+
+
+# --- both sites, and the formats a person wants ---------------------------------------------------
+
+THREE_D = [{"label": "MS INFINITY VISION 3D", "showtimes": 40, "url": "https://d.test/3d"}]
+TWO_D = [{"label": "2D", "showtimes": 12, "url": "https://d.test/2d"}]
+WANT_2D_NO_3D = FormatPref.of(["2D", "MS - Infinity Vision"], ["3D"]).to_json()
+
+
+async def _prefer(env: WorkerEnv, watch_id: int, pref_json: str | None) -> None:
+    async with env.session_factory() as session, session.begin():
+        await watches.set_format_pref(session, watch_id, pref_json)
+
+
+async def _with_district(env: WorkerEnv, notifier: FakeNotifier) -> FakeSignalChain:
+    district = FakeSignalChain("district")
+    env.registry.register(district)  # type: ignore[arg-type]
+    async with env.session_factory() as session, session.begin():
+        await session.execute(text("update chains set enabled = true where code = 'district'"))
+    await _list_in_bangalore(env, district)
+    return district
+
+
+async def test_each_site_that_opens_alerts_once_and_the_watch_ends_when_all_have(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, bms, watch_id = setup
+    district = await _with_district(env, notifier)
+    district.opened.add("ET00000001")
+
+    await probe_signals.run(env, await _probe_job(env, "district"))
+    assert await _stage(env, watch_id) == "sessions"  # BookMyShow has not opened yet
+    assert notifier.to(1)[-1].startswith("Tickets are open for Dune Part Three on District")
+
+    await probe_signals.run(env, await _probe_job(env, "district"))  # District is not asked again
+    assert district.probed == ["ET00000001"]
+
+    bms.opened.add("ET00000001")
+    await probe_signals.run(env, await _probe_job(env, "bms"))
+    assert await _stage(env, watch_id) == "done"
+    assert notifier.to(1)[-1].startswith("Tickets are open for Dune Part Three on BookMyShow")
+    assert sum("Tickets are open" in m for m in notifier.to(1)) == 2
+
+
+async def test_a_3d_only_opening_does_not_alert_someone_who_wants_2d(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await _prefer(env, watch_id, WANT_2D_NO_3D)
+    chain.opened.add("ET00000001")
+    chain.formats = THREE_D
+
+    result = await probe_signals.run(env, await _probe_job(env))
+
+    assert result == {"probed": 1, "opened": 0}
+    assert await _stage(env, watch_id) == "listed"  # still waiting for the 2D one
+    assert not any("Tickets are open" in m for m in notifier.to(1))
+    assert chain.prefs == [
+        FormatPref.of(["2D", "MS - Infinity Vision"], ["3D"])
+    ]  # the chain is told
+
+
+async def test_a_2d_opening_alerts_and_names_the_matching_formats_only(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await _prefer(env, watch_id, WANT_2D_NO_3D)
+    chain.opened.add("ET00000001")
+    chain.formats = [*THREE_D, *TWO_D]
+
+    await probe_signals.run(env, await _probe_job(env))
+
+    message = notifier.to(1)[-1]
+    assert "(2D: 12 shows)" in message
+    assert "3D" not in message
+    assert await _stage(env, watch_id) == "done"
+
+
+async def test_no_preference_still_alerts_on_any_opening(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, _ = setup
+    chain.opened.add("ET00000001")
+    chain.formats = THREE_D
+
+    result = await probe_signals.run(env, await _probe_job(env))
+
+    assert result == {"probed": 1, "opened": 1}
+
+
+async def test_a_label_the_rules_cannot_place_is_put_to_the_llm(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await _prefer(env, watch_id, WANT_2D_NO_3D)
+    chain.opened.add("ET00000001")
+    chain.formats = [{"label": "BRAND NEW FORMAT", "showtimes": 5, "url": "https://d.test/x"}]
+    env = replace(env, llm=FakeLLM(labels_reply="[1]"))
+
+    result = await probe_signals.run(env, await _probe_job(env))
+
+    assert result["opened"] == 1
+
+
+async def test_an_unknown_label_without_an_llm_is_not_alerted(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await _prefer(env, watch_id, WANT_2D_NO_3D)
+    chain.opened.add("ET00000001")
+    chain.formats = [{"label": "IMAX", "showtimes": 5, "url": "https://d.test/x"}]
+
+    result = await probe_signals.run(env, await _probe_job(env))  # env has no LLM
+
+    assert result["opened"] == 0

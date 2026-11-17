@@ -8,7 +8,8 @@ from sqlalchemy import text
 from llmfakes import FakeLLM
 from showwatch.bot import keyboards
 from showwatch.bot.handlers import Env, Sender, freetext
-from showwatch.db.repositories import catalog, movies, requests, users, watches
+from showwatch.db.repositories import catalog, movies, requests, signals, users, watches
+from showwatch.domain.formats import FormatPref
 from showwatch.domain.models import Job
 from showwatch.llm.tasks import intent
 from showwatch.worker.handlers import WorkerEnv, search_showtimes
@@ -522,3 +523,103 @@ async def test_the_sweep_survives_a_job_kind_that_no_longer_exists(env: Env) -> 
         swept = await queue.sweep(session, 900)
 
     assert [(j.kind, j.status) for j in swept] == [("retired_kind", "failed")]
+
+
+# --- format preferences ---------------------------------------------------------------------------
+
+AVENGERS = (
+    '{"title": "Avengers", "formats_wanted": ["2D", "MS - Infinity Vision"], '
+    '"formats_excluded": ["3D"], "confidence": 0.9}'
+)
+
+
+async def test_a_watch_keeps_the_formats_the_person_asked_for(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={"avengers 2d no 3d": AVENGERS}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+    await _movie(env, "bms", "blr", "ET1", "Avengers: Doomsday", "coming_soon")
+
+    await freetext.handle_text(env, _sender(1), "avengers 2d no 3d", HELP)
+    assert notifier.to(1)[0].startswith("Avengers: Doomsday (2D or MS - Infinity Vision; no 3D).\n")
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1].startswith(
+        "Watching Avengers: Doomsday in 2D or MS - Infinity Vision; no 3D."
+    )
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert FormatPref.from_json(item.format_pref) == FormatPref.of(
+        ["2D", "MS - Infinity Vision"], ["3D"]
+    )
+
+
+async def test_asking_again_updates_the_formats_of_an_existing_watch(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    only_2d = '{"title": "Avengers", "formats_wanted": ["2D"], "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"first": AVENGERS, "second": only_2d}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+    await _movie(env, "bms", "blr", "ET1", "Avengers: Doomsday", "coming_soon")
+
+    for message in ("first", "second"):
+        await freetext.handle_text(env, _sender(1), message, HELP)
+        await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    assert notifier.to(1)[-1].startswith("Updated your watch for Avengers: Doomsday in 2D.")
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert FormatPref.from_json(item.format_pref) == FormatPref.of(["2D"])
+
+
+async def test_a_title_nothing_lists_yet_keeps_the_formats_too(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(
+        env, FakeLLM(intents={"new film 2d": AVENGERS.replace("Avengers", "Brand New Film")})
+    )
+    user = await approved_user(env.session_factory, 1, city="blr")
+
+    await freetext.handle_text(env, _sender(1), "new film 2d", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert (item.query, FormatPref.from_json(item.format_pref).include) == (
+        "Brand New Film",
+        ("2D", "MS - Infinity Vision"),
+    )
+
+
+async def test_asking_again_restarts_a_watch_that_had_already_finished(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    env = _with(env, FakeLLM(intents={"again": AVENGERS}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+    movie_id = await _movie(env, "bms", "blr", "ET1", "Avengers: Doomsday", "coming_soon")
+    async with env.session_factory() as session, session.begin():
+        old, _ = await watches.add(
+            session,
+            user_id=user.id,
+            city_id=movie_id and (await _blr_id(session)),
+            query="Avengers: Doomsday",
+            movie_id=movie_id,
+        )
+        await signals.record(session, old.id, "sessions", {"url": "u"}, source="district")
+        await watches.set_stage(session, old.id, "done")
+
+    await freetext.handle_text(env, _sender(1), "again", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+        assert item.id != old.id  # a fresh watch, with no memory of the earlier opening
+        assert item.stage == "waiting"
+        assert await signals.sessions_sources(session, [item.id]) == {item.id: set()}
+    assert notifier.to(1)[-1].startswith("Updated your watch for Avengers: Doomsday")
+
+
+async def _blr_id(session) -> int:  # type: ignore[no-untyped-def]
+    city = await catalog.get_city_by_code(session, "blr")
+    assert city
+    return city.id

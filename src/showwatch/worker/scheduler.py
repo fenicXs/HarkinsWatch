@@ -88,7 +88,7 @@ async def _schedule_probes(
     enqueued: list[tuple[str, str]],
 ) -> None:
     """Queue one `probe_signals` job per signal-capable chain that has watches to look at."""
-    listed = await watches.list_by_stage(session, ["listed"])
+    listed = await watches.list_by_stage(session, ["listed", "sessions"])
     if not listed:
         return
     watched_cities = {item.city_id for item in listed}

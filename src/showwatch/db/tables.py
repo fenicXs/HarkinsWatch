@@ -149,12 +149,15 @@ class WatchItem(_Common, Base):
 class Signal(_Common, Base):
     __tablename__ = "signals"
     __table_args__ = (
-        UniqueConstraint("watch_item_id", "stage"),
+        UniqueConstraint("watch_item_id", "stage", "source"),
         CheckConstraint("stage in ('listed','dates','venues','sessions')", name="stage"),
     )
 
     watch_item_id: Mapped[int] = mapped_column(ForeignKey("watch_items.id", ondelete="CASCADE"))
     stage: Mapped[str] = mapped_column(Text)
+    # Which chain saw it ("" for the stages that belong to no one chain): a watch can have a
+    # `sessions` signal from each chain.
+    source: Mapped[str] = mapped_column(Text, default="", server_default="")
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB)
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

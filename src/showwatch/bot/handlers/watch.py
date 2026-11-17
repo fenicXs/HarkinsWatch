@@ -95,7 +95,9 @@ async def handle_watch(env: Env, sender: Sender, query: str) -> None:
     await env.notifier.send(sender.chat_id, text, buttons)
 
 
-async def watch_for_title(session: AsyncSession, user: User, query: str) -> str:
+async def watch_for_title(
+    session: AsyncSession, user: User, query: str, format_pref: str | None = None
+) -> str:
     """Save a watch for a title nothing lists yet. Same words in any case count as one watch."""
     assert user.current_city_id is not None
     existing = await watches.list_for_user(session, user.id)
@@ -103,7 +105,13 @@ async def watch_for_title(session: AsyncSession, user: User, query: str) -> str:
         return f"You're already watching for '{query}'."
     if len(existing) >= MAX_LISTED:
         return TOO_MANY
-    await watches.add(session, user_id=user.id, city_id=user.current_city_id, query=query)
+    await watches.add(
+        session,
+        user_id=user.id,
+        city_id=user.current_city_id,
+        query=query,
+        format_pref=format_pref,
+    )
     return (
         f"No listed movie matches '{query}' yet. I'll keep watching for it and tell you when "
         "something with that title appears. /list shows your watches and /unwatch removes one."

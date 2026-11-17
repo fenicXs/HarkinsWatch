@@ -18,11 +18,13 @@ class FakeLLM(LLMClient):
         matches: dict[str, str] | None = None,
         *,
         fail: bool = False,
+        labels_reply: str = "[]",
     ) -> None:
         super().__init__([ENDPOINT])
         self.intents = intents or {}
         self.matches = matches or {}
         self.fail = fail
+        self.labels_reply = labels_reply
         self.calls: list[list[dict[str, Any]]] = []
 
     async def complete(
@@ -32,6 +34,8 @@ class FakeLLM(LLMClient):
         if self.fail:
             raise LLMError("primary: ConnectError")
         user = str(messages[-1]["content"])
+        if user.startswith("Labels:"):
+            return Completion(self.labels_reply, ENDPOINT)
         if user.startswith("User's words:"):
             query = user.removeprefix("User's words: ").split("\n", 1)[0]
             return Completion(self.matches.get(query, "[]"), ENDPOINT)

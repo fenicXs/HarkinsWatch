@@ -20,6 +20,7 @@ import structlog
 
 from showwatch.bot import keyboards
 from showwatch.db.repositories import alerts, catalog, movies, signals, users, watches
+from showwatch.domain.formats import FormatPref
 from showwatch.domain.models import (
     Capability,
     ChainInfo,
@@ -52,6 +53,8 @@ class WatchEvent:
     movie: Movie
     stage: str  # "listed" or "sessions"
     evidence: dict[str, Any] = field(default_factory=dict)  # what the signal saw (chain, url...)
+    source: str = ""  # the chain that saw it, for a `sessions` signal from a watch-only chain
+    format_pref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,28 +116,43 @@ async def owed_events(
     if by_id is None:
         by_id = {m.id: m for m in await movies.list_for_city(session, city_id)}
     events: list[WatchEvent] = []
-    for item, stage in await watches.unalerted_stages(session, city_id):
+    for item, stage, source, evidence in await watches.unalerted_stages(session, city_id):
         owner = await users.get(session, item.user_id)
         listed = by_id.get(item.movie_id) if item.movie_id is not None else None
         if owner is not None and owner.status == "approved" and listed is not None:
-            evidence = await signals.evidence_for(session, item.id, stage)
-            events.append(WatchEvent(item.id, owner, listed, stage, evidence))
+            events.append(
+                WatchEvent(item.id, owner, listed, stage, evidence, source, item.format_pref)
+            )
     return events
+
+
+def _formats_text(evidence: dict[str, Any]) -> str:
+    """' (2D: 12 shows, MS - Infinity Vision: 8 shows)' from the formats a signal saw."""
+    parts = []
+    for found in evidence.get("formats") or []:
+        label, count = str(found.get("label") or ""), found.get("showtimes")
+        if label:
+            parts.append(f"{label}: {count} shows" if count else label)
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _watch_alert(chain_name: str, event: WatchEvent) -> _Alert:
     title = event.movie.title
     key = f"watch_open:{event.watch_item_id}:{event.stage}"
+    if event.source:
+        key += f":{event.source}"
+    pref = FormatPref.from_json(event.format_pref)
+    wanted = f" in {pref.describe()}" if not pref.empty else ""
     if event.stage == "listed":
         text = (
             f"{title} is now listed at {chain_name} (coming soon). "
-            "I'll tell you the moment tickets open."
+            f"I'll tell you the moment tickets open{wanted}."
         )
         return _Alert(event.user, key, text, None)
     url = event.evidence.get("url")
     if isinstance(url, str) and url:  # a watch-only chain: a link, not a booking flow
         site = chain_label(str(event.evidence.get("chain") or chain_name))
-        text = f"Tickets are open for {title} on {site}! Book here: {url}"
+        text = f"Tickets are open for {title} on {site}{_formats_text(event.evidence)}! Book here: {url}"
         return _Alert(event.user, key, text, None)
     text = f"{title} is now playing at {chain_name}! Tap to pick a showtime."
     return _Alert(event.user, key, text, keyboards.book_seats(event.movie.id))

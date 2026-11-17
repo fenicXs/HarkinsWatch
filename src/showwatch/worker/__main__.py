@@ -20,7 +20,7 @@ from showwatch.chains.registry import ChainRegistry
 from showwatch.core.db import check_connection, create_engine, create_sessionmaker
 from showwatch.core.logging import configure_logging
 from showwatch.core.settings import Settings, get_settings
-from showwatch.llm.client import LLMClient, vision_endpoints
+from showwatch.llm.client import LLMClient, text_endpoints, vision_endpoints
 from showwatch.llm.tasks.seat_vision import find_points
 from showwatch.notify import TelegramNotifier
 from showwatch.worker.handlers import WorkerEnv
@@ -57,6 +57,7 @@ async def run(settings: Settings) -> None:
                 registry=registry,
                 politeness=politeness,
                 settings=settings,
+                llm=LLMClient(text_endpoints(settings)),
             )
             stop = asyncio.Event()
             loop = asyncio.get_running_loop()

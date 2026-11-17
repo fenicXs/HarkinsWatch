@@ -10,13 +10,17 @@ from showwatch.db import tables
 
 
 async def record(
-    session: AsyncSession, watch_item_id: int, stage: str, evidence: dict[str, Any]
+    session: AsyncSession,
+    watch_item_id: int,
+    stage: str,
+    evidence: dict[str, Any],
+    source: str = "",
 ) -> bool:
-    """Store a signal. False means this stage was already recorded for the watch."""
+    """Store a signal. False means this stage was already recorded for the watch (and source)."""
     stmt = (
         insert(tables.Signal)
-        .values(watch_item_id=watch_item_id, stage=stage, evidence=evidence)
-        .on_conflict_do_nothing(constraint="uq_signals_watch_item_id_stage")
+        .values(watch_item_id=watch_item_id, stage=stage, source=source, evidence=evidence)
+        .on_conflict_do_nothing(constraint="uq_signals_watch_item_id_stage_source")
         .returning(tables.Signal.id)
     )
     return (await session.scalar(stmt)) is not None
@@ -31,11 +35,16 @@ async def stages_seen(session: AsyncSession, watch_item_id: int) -> list[str]:
     return list(rows)
 
 
-async def evidence_for(session: AsyncSession, watch_item_id: int, stage: str) -> dict[str, Any]:
-    """What was seen when this stage was recorded (empty if it was not)."""
-    value = await session.scalar(
-        select(tables.Signal.evidence).where(
-            tables.Signal.watch_item_id == watch_item_id, tables.Signal.stage == stage
+async def sessions_sources(session: AsyncSession, watch_item_ids: list[int]) -> dict[int, set[str]]:
+    """For each watch, the chains that have already told it tickets are open."""
+    found: dict[int, set[str]] = {item_id: set() for item_id in watch_item_ids}
+    if not watch_item_ids:
+        return found
+    rows = await session.execute(
+        select(tables.Signal.watch_item_id, tables.Signal.source).where(
+            tables.Signal.watch_item_id.in_(watch_item_ids), tables.Signal.stage == "sessions"
         )
     )
-    return dict(value) if value else {}
+    for item_id, source in rows.all():
+        found[item_id].add(source)
+    return found

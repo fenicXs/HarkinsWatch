@@ -168,3 +168,32 @@ def test_a_null_seat_count_or_a_capitalised_part_of_day_still_parses() -> None:
     )
     assert parsed is not None
     assert (parsed.seats, parsed.part_of_day) == (2, "evening")
+
+
+def test_format_wishes_and_a_request_kind_are_read() -> None:
+    parsed = intent.parse_reply(
+        '{"title": "Avengers", "confidence": 0.9, "kind": "movie", '
+        '"formats_wanted": ["2D", " MS - Infinity Vision "], "formats_excluded": ["3D"]}',
+        TODAY,
+    )
+    assert parsed is not None
+    assert parsed.formats_wanted == ["2D", "MS - Infinity Vision"]
+    assert parsed.formats_excluded == ["3D"]
+
+
+def test_odd_format_fields_become_empty_lists() -> None:
+    parsed = intent.parse_reply(
+        '{"title": "D", "confidence": 0.9, "formats_wanted": "2D", "formats_excluded": [1, null]}',
+        TODAY,
+    )
+    assert parsed is not None
+    assert (parsed.formats_wanted, parsed.formats_excluded) == ([], [])
+
+
+def test_a_message_that_is_not_about_a_movie_is_not_caught() -> None:
+    assert (
+        intent.parse_reply('{"title": "weather", "confidence": 0.9, "kind": "other"}', TODAY)
+        is None
+    )
+    maybe = intent.parse_reply('{"title": "D", "confidence": 0.9, "kind": "banana"}', TODAY)
+    assert maybe is not None  # an unknown kind is read as a movie request

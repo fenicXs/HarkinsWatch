@@ -7,6 +7,8 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from showwatch.domain.formats import FormatPref
+
 MovieStatus = Literal["now_showing", "coming_soon"]
 UserStatus = Literal["pending", "approved", "denied"]
 WatchStage = Literal["waiting", "listed", "dates", "venues", "sessions", "done"]
@@ -128,6 +130,9 @@ class ParsedRequest(BaseModel):
     format: str | None = Field(default=None, max_length=40)
     seats: int = Field(default=2, ge=1, le=10)
     confidence: float = Field(ge=0, le=1)
+    formats_wanted: list[str] = Field(default_factory=list)  # e.g. ["2D", "MS - Infinity Vision"]
+    formats_excluded: list[str] = Field(default_factory=list)  # e.g. ["3D"]
+    kind: Literal["movie", "other"] = "movie"  # "other": not a request about a movie
 
 
 class User(_Row):
@@ -191,6 +196,6 @@ class Chain(Protocol):
         self, movie: Movie, theatre: Theatre, day: date
     ) -> list[ShowtimeListing]: ...
 
-    async def probe_signals(self, movie: Movie) -> list[Signal]: ...
+    async def probe_signals(self, movie: Movie, pref: FormatPref | None = None) -> list[Signal]: ...
 
     async def book(self, showtime: Showtime, seats: int) -> BookingResult: ...

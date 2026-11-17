@@ -88,3 +88,15 @@ The bot reads a free-text message with an LLM on the ASU RC gateway, shows what 
 | Live, Kannada phrase "ನಾಳೆ ಸಂಜೆ ರಾಮಾಯಣ ಟಿಕೆಟ್ ಬೇಕು" in Bengaluru | read back as "Ramayana, Wed Nov 18, evening"; Confirm created the watch |
 | Live, "two tickets for Ebenezer tomorrow evening" in Phoenix | read back correctly; Confirm ran a real Harkins lookup and offered only the evening show (6:10 PM) |
 | Automated | 450 tests, 94% coverage |
+
+### New stack (`showwatch`), format-aware watches, live runs on 2026-11-17
+
+| Check | Result |
+|---|---|
+| Before: a watch for Avengers (wanting 2D) alerted on District's 3D-only sessions | the case that prompted this change |
+| Plain-language request "Avengers Doomsday in Bangalore, only plain 2D or MS Infinity Vision, no 3D shows" | read back as "(2D or MS - Infinity Vision; no 3D)" and stored as the watch's preference |
+| BookMyShow, plain page with that preference | closed; the 3D format page is skipped |
+| BookMyShow, no preference | follows the format selector to the 3D page (46 sessions) |
+| District with that preference | 40 sessions, all "MS INFINITY VISION 3D": rejected, no alert |
+| Worker log | `sessions_not_wanted` for District; the watch stays `listed` |
+| Automated | 488 tests, 94% coverage |

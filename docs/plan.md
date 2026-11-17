@@ -487,6 +487,16 @@ Done when:
 - Seats stay fixed at 2 (plan C1): a request for another count is read back with a note, and the booking flow still holds 2.
 - "Night" is 21:00 to 02:00 local time, but a show after midnight belongs to the next calendar day, so a night search shows 21:00 to 23:59 on the chosen day only.
 
+#### Format-aware watches (2026-11-17, after M6)
+
+Why: a watch for Avengers alerted on District's Dec 17 sessions, which were all "MS INFINITY VISION 3D", a format the person did not want. A watch now carries the formats wanted and excluded.
+
+- **Preference:** the LLM reads "2D or MS Infinity Vision, no 3D" into `formats_wanted` and `formats_excluded` (stored as JSON in `watch_items.format_pref`) and the bot reads it back for confirmation. A message that is not about a movie (`kind` "other") is not caught.
+- **Matching is rule-based** (`domain/formats.py`): a label containing "3D" never satisfies a preference that did not ask for 3D, so "MS INFINITY VISION 3D" is rejected even though it contains the wanted name. A label the rules cannot place ("IMAX", "DOLBY CINEMA") goes to the LLM once (`llm/tasks/format_label.py`, cached); without an LLM it does not count.
+- **Where the formats come from:** BookMyShow's page state lists every format of a movie with its own showtimes page (the format selector); a probe visits the other format pages that are not ruled out (at most 4). District puts a structured `ScreeningEvent` with `videoFormat` on every session.
+- **Both sites:** a watch gets a `sessions` signal per chain (migration `0005`, `signals.source`) and one alert per chain, and ends when every chain has told it. Asking again for a watch that already exists replaces it, so old signals cannot hide a new opening.
+- **Known limits:** District's JSON records cover the date shown on the page (the first date with shows); BookMyShow tabs are read from the format selector and the formats it lists are those the site has released; the label rules are written for 2D and 3D wording, so another naming scheme falls to the LLM.
+
 ### M7 — District and PVR INOX (closed 2026-11-17)
 
 District was built in M5 with BookMyShow; PVR INOX returned 403 Access Denied (decision 021) and is out of scope. The text below is the original plan.

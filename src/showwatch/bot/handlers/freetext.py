@@ -20,6 +20,7 @@ from showwatch.bot.handlers import Env, Sender, search, watch
 from showwatch.chains.capabilities import can_search_showtimes
 from showwatch.db import queue
 from showwatch.db.repositories import catalog, movies, requests, users, watches
+from showwatch.domain.formats import FormatPref
 from showwatch.domain.models import ChainInfo, Movie, ParsedRequest, User
 from showwatch.domain.title_match import match_for_watch
 from showwatch.llm.client import LLMClient
@@ -95,11 +96,17 @@ def _allow(env: Env, telegram_user_id: int) -> bool:
     return True
 
 
+def _pref_of(parsed: ParsedRequest) -> FormatPref:
+    return FormatPref.of(parsed.formats_wanted, parsed.formats_excluded)
+
+
 def _describe(parsed: ParsedRequest, movie: Movie | None, action: str, *, searching: bool) -> str:
     bits = [movie.title if movie else parsed.title]
     if not searching:
         # A watch is not tied to a day or a time of day: do not read those back as if it were.
-        return f"{bits[0]}.\n{action}"
+        pref = _pref_of(parsed)
+        shown = f"{bits[0]} ({pref.describe()})" if not pref.empty else bits[0]
+        return f"{shown}.\n{action}"
     days = _days(
         {
             "date_from": parsed.date_from.isoformat() if parsed.date_from else None,
@@ -173,6 +180,7 @@ async def handle_text(env: Env, sender: Sender, text: str, help_text: str) -> No
             "date_to": parsed.date_to.isoformat() if parsed.date_to else None,
             "part_of_day": parsed.part_of_day,
             "format": parsed.format,
+            "format_pref": _pref_of(parsed).to_json(),
         }
         request_id = await requests.create(
             session, user.id, payload, env.clock() + REQUEST_LIFETIME
@@ -209,17 +217,39 @@ async def _act(
 ) -> tuple[str, tuple[Movie, str] | None]:
     movie = await movies.get(session, payload["movie_id"]) if payload["movie_id"] else None
     if movie is None or movie.city_id != user.current_city_id:
-        return await watch.watch_for_title(session, user, payload["title"]), None
+        pref_text = payload.get("format_pref")
+        return await watch.watch_for_title(session, user, payload["title"], pref_text), None
     chain = await catalog.get_chain(session, movie.chain_id)
     if not _can_search(movie, chain):
-        _, created = await watches.add(
+        pref_text = payload.get("format_pref")
+        item, created = await watches.add(
             session,
             user_id=user.id,
             city_id=movie.city_id,
             query=movie.title,
             movie_id=movie.id,
+            format_pref=pref_text,
         )
-        done = f"Watching {movie.title}." if created else f"You're already watching {movie.title}."
+        if not created and (item.format_pref != pref_text or item.stage in ("sessions", "done")):
+            # The newest wish wins, and it starts over: a watch that already told the person
+            # about other formats (or finished) is replaced, so its old signals and alerts
+            # cannot hide a new opening.
+            await watches.delete_for_user(session, user.id, item.id)
+            await watches.add(
+                session,
+                user_id=user.id,
+                city_id=movie.city_id,
+                query=movie.title,
+                movie_id=movie.id,
+                format_pref=pref_text,
+            )
+        pref = FormatPref.from_json(pref_text)
+        wanted = f" in {pref.describe()}" if not pref.empty else ""
+        done = (
+            f"Watching {movie.title}{wanted}."
+            if created
+            else f"Updated your watch for {movie.title}{wanted}."
+        )
         return f"{done} I'll message you with a link the moment tickets open.", None
 
     city = await catalog.get_city(session, movie.city_id)
