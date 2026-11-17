@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 
+from showwatch.chains.base import BlockedError
 from showwatch.db.repositories import catalog, movies, signals, watches
 from showwatch.domain.models import Capability, City, Job, Movie, WatchItem
 from showwatch.domain.title_match import match_for_watch
@@ -47,21 +48,30 @@ async def _probe_city(env: WorkerEnv, chain_code: str, chain_id: int, city: City
             groups.setdefault(movie.id, (movie, []))[1].append(item)
 
     probed = opened = 0
-    for movie, group in groups.values():
-        seen = await chain.probe_signals(movie)  # may raise BlockedError: the runner backs off
-        probed += 1
-        found = next((s for s in seen if s.stage == "sessions"), None)
-        if found is None:
-            continue
-        evidence: dict[str, Any] = {"chain": chain_code, "movie_id": movie.id, **found.evidence}
-        async with env.session_factory() as session, session.begin():
-            for item in group:
-                await signals.record(session, item.id, "sessions", evidence)
-                await watches.set_stage(session, item.id, "done")  # alert delivered below
-        opened += 1
-        log.info("sessions_opened", chain=chain_code, movie=movie.title, watchers=len(group))
-    if opened:
-        await deliver_owed(env, city)
+    try:
+        for movie, group in groups.values():
+            try:
+                seen = await chain.probe_signals(movie)
+            except BlockedError:
+                raise  # the site pushed back: stop here and let the runner back off
+            except Exception:
+                # One broken page must not starve the other movies or hold back alerts.
+                log.exception("probe_failed", chain=chain_code, movie=movie.title)
+                continue
+            probed += 1
+            found = next((s for s in seen if s.stage == "sessions"), None)
+            if found is None:
+                continue
+            evidence: dict[str, Any] = {"chain": chain_code, "movie_id": movie.id, **found.evidence}
+            async with env.session_factory() as session, session.begin():
+                for item in group:
+                    await signals.record(session, item.id, "sessions", evidence)
+                    await watches.set_stage(session, item.id, "done")  # alert delivered below
+            opened += 1
+            log.info("sessions_opened", chain=chain_code, movie=movie.title, watchers=len(group))
+    finally:
+        if opened:  # a block later in the loop must not delay alerts already decided
+            await deliver_owed(env, city)
     return {"probed": probed, "opened": opened}
 
 

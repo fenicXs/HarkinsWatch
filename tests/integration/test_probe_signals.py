@@ -247,3 +247,37 @@ async def test_a_listed_watch_queues_one_probe_per_chain_then_waits_the_interval
         ).one()
     # The next look is about SIGNAL_INTERVAL_S (300 s) after the last one, give or take 20%.
     assert 240 <= (row.due - row.finished).total_seconds() <= 361
+
+
+async def test_one_broken_page_does_not_stop_the_other_movies_or_their_alerts(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await approved_user(env.session_factory, 2, city="blr")
+    from showwatch.db.repositories import users
+
+    async with env.session_factory() as session:
+        second = await users.get_by_telegram_id(session, 2)
+    assert second
+    await add_watch(env.session_factory, second, "other film", city="blr")
+    chain.movies = [
+        *chain.movies,
+        MovieListing(
+            "ET00000002", "Other Film", PAGE.replace("ET00000001", "ET00000002"), "coming_soon"
+        ),
+    ]
+    await _list_in_bangalore(env, chain)
+    chain.opened.add("ET00000002")
+    original = chain.probe_signals
+
+    async def flaky(movie: Movie) -> list[Signal]:
+        if movie.external_id == "ET00000001":
+            raise RuntimeError("HTTP 500")
+        return await original(movie)
+
+    chain.probe_signals = flaky  # type: ignore[method-assign]
+    result = await probe_signals.run(env, await _probe_job(env))
+
+    assert result == {"probed": 1, "opened": 1}
+    assert await _stage(env, watch_id) == "listed"  # the broken one is tried again next time
+    assert any("Tickets are open for Other Film" in m for m in notifier.to(2))

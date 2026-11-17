@@ -180,6 +180,21 @@ Real `book_session()` runs through `scripts/smoke_book.py` against Arizona Mills
 | Vision-only run on a standard map | 1 of 2 runs found seats before a second ask was added; held after it |
 | Vision point accuracy (first 10 points landing on a seat, one map) | `qwen36-35b-a3b` 9/10 in 4.4 s; `qwen38-27b` 8/10; `gemma4-31b-it` 4/10; `qwen3-vl-32b` and `llama4-scout-17b` returned nothing usable; `qwen36-35b-a3b` with thinking on timed out |
 
+### New stack (`showwatch`), M5 Bangalore watch-only chains, live runs on 2026-11-16
+
+BookMyShow and District are read through a real browser window without login (decisions 019, 020). PVR INOX returned 403 Access Denied and was dropped (decision 021). Neither chain books: the alert carries a link and you book by hand.
+
+| Check | Result |
+|---|---|
+| Plain HTTP or headless Chromium against BookMyShow | blocked (Cloudflare challenge); a headed browser works |
+| BookMyShow movie list, installed Chrome on the PC | 20 movies (after scrolling to load the whole list) |
+| BookMyShow, headed Chromium inside the worker container (Xvfb) | list of 11 movies, no block |
+| District movie list | 64 movies |
+| "Tickets open" on a movie that has sessions (Ramayana), both chains | detected as open on both |
+| BookMyShow on a movie with no sessions (Avengers: Doomsday, 17 Dec) | page says "We couldn't find anything"; parsed as closed |
+| District for the same unreleased movie | lists sessions for 17 Dec already, earlier than BookMyShow |
+| End-to-end in the running worker: watch added, list check, probe | watch moved `listed` then `sessions` then `done` with no block. The Telegram send could not be checked: the database holds a placeholder admin ID (see below) |
+
 ## Setup (legacy bot)
 
 See [docs/procedure.md](docs/procedure.md) for the full step-by-step history of how this was built. Short version:

@@ -51,9 +51,13 @@ class PageFetcher:
 
     async def __aenter__(self) -> Self:
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self._headless, channel=self._channel
-        )
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                headless=self._headless, channel=self._channel
+            )
+        except BaseException:
+            await self._playwright.stop()  # `__aexit__` never runs when entering fails
+            raise
         return self
 
     async def __aexit__(
@@ -62,10 +66,12 @@ class PageFetcher:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        if self._browser is not None:
-            await self._browser.close()
-        if self._playwright is not None:
-            await self._playwright.stop()
+        try:
+            if self._browser is not None:
+                await self._browser.close()
+        finally:
+            if self._playwright is not None:
+                await self._playwright.stop()
 
     async def get(self, url: str, *, ready_js: str | None = None, scroll_passes: int = 0) -> str:
         """The rendered HTML of `url`. `ready_js` is a JavaScript expression that turns truthy

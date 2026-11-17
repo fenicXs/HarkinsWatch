@@ -445,6 +445,17 @@ Stage rules (the other two stages, `dates` and `venues`, are unused for these ch
 
 Done when (replaces the "real opening" and timing lines for this milestone): fixture replay (listed → sessions) sends each alert once and in order; a live probe of an open BMS and an open District page returns `sessions` and of a closed one returns none; a 30-minute live run triggers no back-off. A real opening is a bonus, not a gate.
 
+#### M5 as built: deviations from the re-plan
+
+- Migration is `0003_bangalore_chains` (`0002` was already taken by movie tracking); `parsed_requests` moves to `0004`.
+- One `probe_signals` job per chain (payload `{chain}`), not per watch; it probes every `listed` watch's movie once per run and finds the same title on each signal chain. Chain-wide ownership matches the existing per-chain job limit.
+- `Chain.probe_signals` takes a `Movie`, not a `WatchItem` (the page to load comes from the movie's row).
+- Settings added: `SIGNAL_INTERVAL_S` (300), `SIGNAL_BROWSER_CHANNEL`, `SIGNAL_HEADLESS` (false). The worker runs headed Chromium under Xvfb; no Chrome install was needed.
+- Lists load as you scroll, so the fetcher scrolls 6 times before reading (`LIST_SCROLL_PASSES`). Container runs still saw fewer movies (11) than the PC (20), so BookMyShow's baseline is lower in the container.
+- BookMyShow lists format variants as separate entries (for example "Avengers: Doomsday" has a plain page and a "MS-Infinity Vsn 3d" page that already has sessions). A watch follows the first title match only, so it can miss an opening that appears on a variant page first.
+- District has no saved "closed" page: its closed rule (no show times on the page) is tested with a minimal synthetic page; the three saved pages are all open.
+- Watch alerts for these chains are links (no booking button); the text names the site that opened first.
+
 ### M6 — Plain-language requests and title matching
 
 | Path | Action | Purpose |
