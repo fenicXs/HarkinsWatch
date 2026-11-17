@@ -126,13 +126,15 @@ async def owed_events(
     return events
 
 
-def _formats_text(evidence: dict[str, Any]) -> str:
+def _formats_text(evidence: dict[str, Any], pref: FormatPref) -> str:
     """' (2D: 12 shows, MS - Infinity Vision: 8 shows)' from the formats a signal saw."""
     parts = []
     for found in evidence.get("formats") or []:
         label, count = str(found.get("label") or ""), found.get("showtimes")
         if label:
             parts.append(f"{label}: {count} shows" if count else label)
+        elif not pref.empty:  # they asked for formats and the site did not say which this is
+            parts.append("format not stated by the site")
     return f" ({', '.join(parts)})" if parts else ""
 
 
@@ -152,7 +154,7 @@ def _watch_alert(chain_name: str, event: WatchEvent) -> _Alert:
     url = event.evidence.get("url")
     if isinstance(url, str) and url:  # a watch-only chain: a link, not a booking flow
         site = chain_label(str(event.evidence.get("chain") or chain_name))
-        text = f"Tickets are open for {title} on {site}{_formats_text(event.evidence)}! Book here: {url}"
+        text = f"Tickets are open for {title} on {site}{_formats_text(event.evidence, pref)}! Book here: {url}"
         return _Alert(event.user, key, text, None)
     text = f"{title} is now playing at {chain_name}! Tap to pick a showtime."
     return _Alert(event.user, key, text, keyboards.book_seats(event.movie.id))

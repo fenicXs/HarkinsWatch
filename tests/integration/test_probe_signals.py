@@ -388,3 +388,53 @@ async def test_an_unknown_label_without_an_llm_is_not_alerted(
     result = await probe_signals.run(env, await _probe_job(env))  # env has no LLM
 
     assert result["opened"] == 0
+
+
+async def test_a_page_that_names_no_format_still_alerts_and_says_so(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    await _prefer(env, watch_id, WANT_2D_NO_3D)
+    chain.opened.add("ET00000001")
+    chain.formats = [{"label": "", "showtimes": 9, "url": "https://d.test/x"}]
+
+    await probe_signals.run(env, await _probe_job(env))
+
+    assert "(format not stated by the site)" in notifier.to(1)[-1]
+
+
+async def test_a_watch_ends_when_every_site_that_carries_the_movie_has_told_it(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, bms, watch_id = setup
+    district = FakeSignalChain("district")
+    district.movies = []  # District does not list this movie at all
+    env.registry.register(district)  # type: ignore[arg-type]
+    async with env.session_factory() as session, session.begin():
+        await session.execute(text("update chains set enabled = true where code = 'district'"))
+    await _list_in_bangalore(env, district)
+    bms.opened.add("ET00000001")
+
+    await probe_signals.run(env, await _probe_job(env))
+
+    assert await _stage(env, watch_id) == "done"  # nothing to wait for from District
+
+
+async def test_a_watch_removed_while_its_page_loaded_does_not_break_the_probe(
+    setup: tuple[WorkerEnv, FakeSignalChain, int], notifier: FakeNotifier
+) -> None:
+    env, chain, watch_id = setup
+    chain.opened.add("ET00000001")
+    original = chain.probe_signals
+
+    async def probe_then_lose_the_watch(movie: Movie, pref: object = None) -> list[Signal]:
+        result = await original(movie, pref)
+        async with env.session_factory() as session, session.begin():
+            await session.execute(text("delete from watch_items"))
+        return result
+
+    chain.probe_signals = probe_then_lose_the_watch  # type: ignore[method-assign]
+
+    result = await probe_signals.run(env, await _probe_job(env))
+
+    assert result == {"probed": 1, "opened": 0}

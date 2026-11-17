@@ -101,9 +101,12 @@ async def watch_for_title(
     """Save a watch for a title nothing lists yet. Same words in any case count as one watch."""
     assert user.current_city_id is not None
     existing = await watches.list_for_user(session, user.id)
-    if any(w.query.casefold() == query.casefold() for w in existing):
-        return f"You're already watching for '{query}'."
-    if len(existing) >= MAX_LISTED:
+    same = next((w for w in existing if w.query.casefold() == query.casefold()), None)
+    if same is not None:
+        if same.format_pref == format_pref and same.stage != "done":
+            return f"You're already watching for '{query}'."
+        await watches.delete_for_user(session, user.id, same.id)  # the newest wish wins
+    elif len(existing) >= MAX_LISTED:
         return TOO_MANY
     await watches.add(
         session,

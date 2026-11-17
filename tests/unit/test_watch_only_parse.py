@@ -150,3 +150,18 @@ def test_district_records_that_are_not_sessions_or_not_json_are_ignored() -> Non
         '<script type="application/ld+json">[{"@type": "ScreeningEvent", "name": "X (2D)"}]</script>'
     )
     assert dict(district.extract_screenings(page)) == {"2D": 1}
+
+
+def test_other_format_pages_are_visited_wanted_first_then_unplaced_never_unwanted() -> None:
+    from showwatch.domain.formats import FormatPref
+
+    entries = [
+        bms.FormatEntry("IMAX", "English", "ET1", "a"),
+        bms.FormatEntry("MS-Infinity Vsn 3d", "English", "ET2", "b"),
+        bms.FormatEntry("2D", "English", "ET3", "c"),
+        bms.FormatEntry("MS - Infinity Vision", "English", "ET4", "d"),
+        bms.FormatEntry("2D", "Hindi", "ET0", "own"),
+    ]
+    pref = FormatPref.of(["2D", "MS - Infinity Vision"], ["3D"])
+    order = [e.code for e in bms.visit_order(entries, "ET0", pref)]
+    assert order == ["ET3", "ET4", "ET1"]  # wanted in page order, then IMAX; 3D and own page never

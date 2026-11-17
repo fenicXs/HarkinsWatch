@@ -623,3 +623,20 @@ async def _blr_id(session) -> int:  # type: ignore[no-untyped-def]
     city = await catalog.get_city_by_code(session, "blr")
     assert city
     return city.id
+
+
+async def test_asking_again_for_a_title_not_listed_yet_replaces_its_watch(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    only_2d = '{"title": "Brand New Film", "formats_wanted": ["2D"], "confidence": 0.9}'
+    no_3d = '{"title": "Brand New Film", "formats_excluded": ["3D"], "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"one": only_2d, "two": no_3d}))
+    user = await approved_user(env.session_factory, 1, city="blr")
+
+    for message in ("one", "two"):
+        await freetext.handle_text(env, _sender(1), message, HELP)
+        await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    async with env.session_factory() as session:
+        (item,) = await watches.list_for_user(session, user.id)
+    assert FormatPref.from_json(item.format_pref) == FormatPref.of([], ["3D"])

@@ -25,16 +25,24 @@ PROMPT = (
 
 _ARRAY = re.compile(r"\[[^\[\]]*\]")
 _CACHE: dict[tuple[str | None, str], bool] = {}
+MAX_CACHE = 500
+MAX_LABEL_LENGTH = 60
 
 
-def parse_numbers(text: str, count: int) -> set[int]:
+def _shown(label: str) -> str:
+    """A label as it goes into the prompt: one short line, so a page cannot add list items."""
+    return " ".join(label.split())[:MAX_LABEL_LENGTH]
+
+
+def parse_numbers(text: str, count: int) -> set[int] | None:
+    """The numbers in the reply's array; None when there is no usable array (not the same as [])."""
     found = _ARRAY.search(text)
     if found is None:
-        return set()
+        return None
     try:
         raw = json.loads(found.group(0))
     except ValueError:
-        return set()
+        return None
     return {n for n in raw if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= count}
 
 
@@ -47,7 +55,7 @@ async def judge(client: LLMClient, labels: list[str], pref: FormatPref) -> dict[
         system = PROMPT.format(
             wanted=" or ".join(pref.include) or "any", unwanted=", ".join(pref.exclude) or "none"
         )
-        listing = "\n".join(f"{n}. {label}" for n, label in enumerate(todo, start=1))
+        listing = "\n".join(f"{n}. {_shown(label)}" for n, label in enumerate(todo, start=1))
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"Labels:\n{listing}"},
@@ -58,6 +66,11 @@ async def judge(client: LLMClient, labels: list[str], pref: FormatPref) -> dict[
             log.warning("format_label_llm_failed")
             return {label: answers.get(label, False) for label in labels}  # not cached: retry later
         yes = parse_numbers(completion.text, len(todo))
+        if yes is None:  # a garbled reply says nothing: do not remember it as "no"
+            log.warning("format_label_unreadable_reply")
+            return {label: answers.get(label, False) for label in labels}
+        if len(_CACHE) > MAX_CACHE:
+            _CACHE.clear()
         for n, label in enumerate(todo, start=1):
             _CACHE[(pref_key, label)] = n in yes
             answers[label] = n in yes

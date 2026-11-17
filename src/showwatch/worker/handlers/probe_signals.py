@@ -13,6 +13,7 @@ puts the job back after the back-off.
 from typing import Any
 
 import structlog
+from sqlalchemy.exc import IntegrityError
 
 from showwatch.chains.base import BlockedError
 from showwatch.db.repositories import catalog, movies, signals, watches
@@ -43,8 +44,12 @@ async def matching_formats(
     The rules decide first. Only labels they cannot place are put to the LLM, once each; with
     no LLM, or if it fails, such a label does not count (an unsure alert is not sent).
     """
-    keep = [f for f in formats if classify(str(f.get("label") or ""), pref) == "match"]
-    unknown = [f for f in formats if classify(str(f.get("label") or ""), pref) == "unknown"]
+    # A page that names no format cannot be checked: tell the person (the alert says so)
+    # rather than stay silent about a possible opening.
+    unnamed = [f for f in formats if not str(f.get("label") or "").strip()]
+    named = [f for f in formats if str(f.get("label") or "").strip()]
+    keep = [f for f in named if classify(str(f["label"]), pref) == "match"] + unnamed
+    unknown = [f for f in named if classify(str(f["label"]), pref) == "unknown"]
     if unknown and env.llm is not None and env.llm.configured:
         verdicts = await format_label.judge(env.llm, [str(f["label"]) for f in unknown], pref)
         keep += [f for f in unknown if verdicts.get(str(f["label"]))]
@@ -59,16 +64,16 @@ def _formats_of(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     return [{"label": "", "showtimes": evidence.get("showtimes"), "url": evidence.get("url")}]
 
 
-async def _signal_chains(env: WorkerEnv, session: Any, city: City) -> set[str]:
-    """The chains that can report signals for this city (the ones a watch waits to hear from)."""
-    served: set[str] = set()
+async def _signal_chains(env: WorkerEnv, session: Any, city: City) -> dict[str, int]:
+    """The chains that can report signals for this city (code -> id)."""
+    served: dict[str, int] = {}
     for chain in await catalog.list_enabled_chains(session):
         if chain.code not in env.registry.codes():
             continue
         if Capability.SIGNALS not in env.registry.get(chain.code).capabilities:
             continue
         if await catalog.list_theatres(session, chain.id, city.id):
-            served.add(chain.code)
+            served[chain.code] = chain.id
     return served
 
 
@@ -80,11 +85,8 @@ async def _probe_city(env: WorkerEnv, chain_code: str, chain_id: int, city: City
         items = await watches.list_by_stage(session, ["listed", "sessions"], city_id=city.id)
         heard = await signals.sessions_sources(session, [i.id for i in items])
         served = await _signal_chains(env, session, city)
-        chain_movies = [
-            m
-            for m in await movies.list_for_city(session, city.id, current_only=True)
-            if m.chain_id == chain_id
-        ]
+        city_movies = await movies.list_for_city(session, city.id, current_only=True)
+        chain_movies = [m for m in city_movies if m.chain_id == chain_id]
     groups: dict[tuple[int, str | None], tuple[Movie, FormatPref, list[WatchItem]]] = {}
     for item in items:
         if chain_code in heard.get(item.id, set()):
@@ -120,13 +122,25 @@ async def _probe_city(env: WorkerEnv, chain_code: str, chain_id: int, city: City
                 "url": url,
                 "formats": matched,
             }
-            async with env.session_factory() as session, session.begin():
-                for item in group:
-                    await signals.record(session, item.id, "sessions", evidence, source=chain_code)
-                    told = heard.get(item.id, set()) | {chain_code}
-                    await watches.set_stage(
-                        session, item.id, "done" if served <= told else "sessions"
-                    )
+            try:
+                async with env.session_factory() as session, session.begin():
+                    for item in group:
+                        await signals.record(
+                            session, item.id, "sessions", evidence, source=chain_code
+                        )
+                        told = heard.get(item.id, set()) | {chain_code}
+                        carried = {
+                            code
+                            for code, cid in served.items()
+                            if movie_on_chain(item, [m for m in city_movies if m.chain_id == cid])
+                        } | {chain_code}
+                        await watches.set_stage(
+                            session, item.id, "done" if carried <= told else "sessions"
+                        )
+            except (IntegrityError, LookupError):
+                # A watch was removed or replaced while the page loaded: nothing to record.
+                log.warning("watch_gone_mid_probe", chain=chain_code, movie=movie.title)
+                continue
             opened += 1
             log.info("sessions_opened", chain=chain_code, movie=movie.title, watchers=len(group))
     finally:

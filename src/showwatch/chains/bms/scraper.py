@@ -132,6 +132,13 @@ def parse_format_entries(html: str) -> list[FormatEntry]:
     return list(entries.values())
 
 
+def visit_order(entries: list[FormatEntry], own_code: str, pref: FormatPref) -> list[FormatEntry]:
+    """The other format pages worth a look: wanted ones first, then ones the rules cannot place."""
+    rank = {"match": 0, "unknown": 1}
+    others = [e for e in entries if e.code != own_code and classify(e.label, pref) != "no"]
+    return sorted(others, key=lambda e: rank[classify(e.label, pref)])  # stable: keeps page order
+
+
 def page_format(html: str) -> str:
     """The format label of the page itself, when the page says (it does for a single format)."""
     analytics = _dynamic_data(html).get("metadata", {}).get("analytics", {})
@@ -189,12 +196,7 @@ class BookMyShowChain(BaseChain):
             seen = parse_showtimes(html)
             if seen.open:
                 opened.append(_found(label, seen, url))
-            others = [
-                e
-                for e in entries
-                if e.code != movie.external_id and classify(e.label, pref) != "no"
-            ]
-            for entry in others[:MAX_FORMAT_PAGES]:
+            for entry in visit_order(entries, movie.external_id, pref)[:MAX_FORMAT_PAGES]:
                 format_url = _showtimes_url(entry.slug, entry.code)
                 format_seen = parse_showtimes(
                     await fetcher.get(format_url, ready_js=SHOWTIMES_READY_JS)
