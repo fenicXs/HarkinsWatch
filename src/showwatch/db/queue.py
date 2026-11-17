@@ -237,9 +237,15 @@ async def requeue(
     *,
     now: datetime | None = None,
 ) -> Job:
-    """Put a job back without counting an attempt (for example, a locked browser profile)."""
+    """Put a job back without counting an attempt (for example, a locked browser profile).
+
+    The number of requeues is kept in `result["requeues"]` so a handler can stop a job that never
+    gets to run.
+    """
     now = now or _now()
     row = await _owned(session, job_id, worker_id)
+    previous = dict(row.result or {})
+    row.result = {**previous, "requeues": int(previous.get("requeues", 0)) + 1}
     row.status = "queued"
     row.run_after = now + timedelta(seconds=delay_s)
     row.locked_by = None

@@ -23,6 +23,7 @@ MANUAL = "Couldn't auto-pick seats; choose {count} yourself here: {url}"
 FAILED = "Booking failed — try again."
 BUSY = "The theatre site is busy right now. Try again in a few minutes."
 STARTED = "That showtime has already started."
+MAX_REQUEUES = 5  # a profile that stays locked would otherwise requeue the booking forever
 
 
 async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
@@ -55,6 +56,10 @@ async def run(env: WorkerEnv, job: Job) -> dict[str, Any]:
         chain = env.registry.require(chain_info.code, Capability.BOOK)
         result = await chain.book(showtime, seats)
     except RetryLater:
+        if int((job.result or {}).get("requeues", 0)) >= MAX_REQUEUES:
+            log.error("book_gave_up_waiting", job_id=job.id)
+            await env.notifier.send(chat_id, FAILED)
+            return {"outcome": "failed", "reason": "browser busy"}
         raise  # the runner puts the job back without counting an attempt
     except BlockedError:
         await env.notifier.send(chat_id, BUSY)

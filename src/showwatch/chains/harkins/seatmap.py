@@ -4,6 +4,7 @@ A seat is a dict with `id` (like "I6"), `row` ("I"), `num` (6), and `x`, `y` (po
 map; a larger `y` is further back). Ported unchanged from `legacy/booker.py` and `legacy/seat_ai.py`.
 """
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -18,7 +19,7 @@ AISLE_GAP_FACTOR = 1.6
 def parse_seat(raw_id: str | None, x: float, y: float) -> Seat | None:
     """A seat dict from a button's id and position, or None if the id is not "<letters><number>"."""
     match = SEAT_ID.match(raw_id or "")
-    if match is None:
+    if match is None or math.isnan(x) or math.isnan(y):  # a button without a position is unusable
         return None
     return {
         "id": raw_id,

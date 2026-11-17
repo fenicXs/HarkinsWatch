@@ -339,3 +339,14 @@ async def test_claim_does_not_hide_database_errors_that_are_not_the_race(
     monkeypatch.setattr(session, "flush", broken_flush)
     with pytest.raises(IntegrityError, match="ck_jobs_status"):
         await queue.claim(session, "w1", now=LATER)
+
+
+async def test_requeue_counts_how_often_a_job_was_put_back(session: AsyncSession) -> None:
+    ids = await _ids(session)
+    job = await queue.enqueue(session, "book", {}, chain_id=ids["harkins"], run_after=T0)
+    await queue.claim(session, "w1", now=T0)
+    first = await queue.requeue(session, job.id, "w1", 0, now=T0)
+    assert first.result == {"requeues": 1}
+    await queue.claim(session, "w1", now=T0 + timedelta(seconds=1))
+    second = await queue.requeue(session, job.id, "w1", 0, now=T0)
+    assert second.result == {"requeues": 2}

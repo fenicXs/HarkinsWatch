@@ -25,7 +25,7 @@ PROMPT = (
     "Return ONLY a JSON array of [y, x] points normalized 0-1000 relative to THIS image."
 )
 
-POINT_ARRAY = re.compile(r"\[\s*\[.*\]\s*\]", re.DOTALL)
+POINT_ARRAY = re.compile(r"\[\s*\[.*?\]\s*\]", re.DOTALL)  # lazy: the first array only
 ATTEMPTS = 2
 PAUSE_AFTER_ERROR_S = 2.0
 PAUSE_AFTER_EMPTY_S = 4.0

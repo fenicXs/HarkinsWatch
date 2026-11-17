@@ -147,6 +147,10 @@ async def _confirm_points(
         await page.mouse.click(screen_x, screen_y)
         await page.wait_for_timeout(250)
         new = (await _selected_ids(page)) - before
+        if len(new) > 1:  # a point that lands between seats selects several: undo them all
+            for stray in new:
+                await page.locator(f"button#{stray}").dispatch_event("click")
+            await page.wait_for_timeout(100)
         if len(new) == 1:
             seat_id = next(iter(new))
             match = seatmap.SEAT_ID.match(seat_id)
@@ -183,7 +187,7 @@ async def _select_by_vision(page: Page, vision: VisionPicker, seats: int) -> lis
         await page.wait_for_timeout(250)
     ids = [seat_id for seat_id, _, _ in run]
     selected = await _selected_ids(page)
-    return ids if all(i in selected for i in ids) else None
+    return ids if selected == set(ids) else None
 
 
 async def book_session(
@@ -229,8 +233,8 @@ async def book_session(
                 return manual
             log.info("seats_picked", seats=selected, by="vision" if by_vision else "buttons")
 
-            await page.locator(CHECKOUT_BUTTON).click()
             try:
+                await page.locator(CHECKOUT_BUTTON).click()
                 await page.wait_for_url("**/session/*/ticketing/*", timeout=CHECKOUT_URL_TIMEOUT_MS)
             except PlaywrightError:  # the seats were probably taken as we continued
                 log.warning("checkout_not_reached", seats=selected)

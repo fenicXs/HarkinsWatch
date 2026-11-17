@@ -25,6 +25,7 @@ def test_parse_seat_reads_row_and_number_and_refuses_other_ids() -> None:
     assert seatmap.parse_seat("12", 1, 2) is None
     assert seatmap.parse_seat("", 1, 2) is None
     assert seatmap.parse_seat(None, 1, 2) is None
+    assert seatmap.parse_seat("A1", float("nan"), 2) is None  # no position on the button
 
 
 def test_fewer_than_three_rows_is_one_region() -> None:

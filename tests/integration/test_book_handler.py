@@ -204,3 +204,19 @@ async def test_a_locked_profile_puts_the_job_back_without_using_the_attempt(
             )
         ).one()
     assert (row.status, row.attempts, row.later) == ("queued", 0, True)
+
+
+async def test_a_profile_that_stays_locked_stops_requeueing_and_tells_the_user(
+    worker_env: WorkerEnv, notifier: FakeNotifier, chain: FakeChain
+) -> None:
+    chain.book_error = RetryLater("browser profile is in use")
+    user_id, showtime_id = await _setup(worker_env)
+    job = _job(user_id, showtime_id).model_copy(update={"result": {"requeues": book.MAX_REQUEUES}})
+
+    result = await book.run(worker_env, job)
+
+    assert result == {"outcome": "failed", "reason": "browser busy"}
+    assert notifier.to(1) == ["Booking failed — try again."]
+    fewer = _job(user_id, showtime_id).model_copy(update={"result": {"requeues": 1}})
+    with pytest.raises(RetryLater):
+        await book.run(worker_env, fewer)

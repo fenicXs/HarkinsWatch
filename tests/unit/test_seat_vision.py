@@ -90,3 +90,8 @@ async def test_no_endpoint_configured_gives_no_points_without_waiting_forever() 
     sleeper = Sleeper()
     assert await find_points(LLMClient([]), b"x", sleep=sleeper) == []
     assert sleeper.pauses == [2.0]
+
+
+def test_only_the_first_array_is_read_when_the_reply_has_two() -> None:
+    text = "Answer: [[100, 200], [300, 400]] (an earlier guess was [[1, 2]])"
+    assert parse_points(text) == [(100.0, 200.0), (300.0, 400.0)]

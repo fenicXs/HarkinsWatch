@@ -443,7 +443,8 @@ Done when: same as M5, per site.
 - The seat-button picker gives up after 3 failed pairs, not 2 (seats another visitor holds fail to click); a checkout page that is not reached after "Continue to Checkout" returns the manual link instead of failing.
 - `RetryLater(reason, delay_s)` (in `chains/base.py`) is how a handler asks the runner to requeue without using an attempt; the runner handles it next to `BlockedError`.
 - `booker.py` is excluded from the coverage gate (it drives the live site; `scripts/smoke_book.py` checks it by hand); `seatmap.py` and `llm/` are in the gate.
-- A `book` job swept after a worker crash is marked failed but the user is not messaged yet (the scheduler spec's "Booking failed" message for swept `book` jobs is not built): known gap.
+- `queue.requeue` counts requeues in `jobs.result["requeues"]`; the `book` handler gives up after 5 (tells the user "Booking failed") so a locked profile cannot requeue a booking forever.
+- Vision: a point that selects several seats is undone, and the final selection must be exactly the chosen pair; the point regex takes the first array only.
 
 ## Appendix A — Schema
 
