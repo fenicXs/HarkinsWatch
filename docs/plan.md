@@ -410,6 +410,41 @@ Done when:
 - No back-off is triggered during a 2-hour run at the 30-minute base interval plus one 10-minute run at the 1-minute fast interval.
 - Fallback: if no real opening occurs within 7 days of coding, replay a recorded fixture sequence (listed → dates → venues → sessions pages) through the scheduler; alerts arrive in that order, once each.
 
+#### M5 re-plan (2026-11-16, after the probes in decisions 019–021)
+
+Scope change: **BookMyShow and District, watch-only** (owner books by hand; no BOOK capability, no seat flow). PVR INOX is dropped (403 Access Denied, decision 021). Capabilities: `WATCH | SIGNALS`.
+
+Stage rules (the other two stages, `dates` and `venues`, are unused for these chains):
+
+| Stage | Detected when | Source |
+|---|---|---|
+| `listed` | The movie appears on the chain's Bengaluru movie list | `check_chain` (`list_movies`) |
+| `sessions` | The movie's showtimes page lists venues with times (BMS says "We couldn't find anything" when closed) | `probe_signals` |
+
+- Every movie listing is stored as `coming_soon`; only a probe moves a watch to `sessions` (BMS lists unreleased films such as Avengers: Doomsday). Bangalore sends **watch alerts only**, no generic new-release alerts.
+- A watch attaches to one movie row; the probe also looks up the matching title on each other `SIGNALS` chain in the city. The first chain to show sessions wins; the alert names it and links its page.
+- Polling: `probe_signals` per (watch, chain) every `SIGNAL_INTERVAL_S` (new setting, default 300, jittered) instead of the 60 s fast interval, because BMS challenges bursts. Any 403, 429 or challenge page raises `BlockedError` and uses the M3 back-off. Never solved, never retried around.
+- Access: BMS needs a headed browser (headless was challenged). The worker already runs headed Chromium under Xvfb; if BMS still challenges it there, the fallback is installing Google Chrome in the worker image (a normal browser, no stealth). District is tested with plain HTTP first.
+
+| Path | Action | Purpose |
+|---|---|---|
+| `src/showwatch/chains/bms/__init__.py`, `scraper.py` | Create | `BookMyShowChain`: `list_movies` (explore page), `probe_signals` (showtimes page), pure `parse_*` functions |
+| `src/showwatch/chains/district/__init__.py`, `scraper.py` | Create | `DistrictChain`: same shape |
+| `src/showwatch/chains/browser.py` | Create | Shared headed-browser page fetch; turns 403/429/challenge titles into `BlockedError` |
+| `src/showwatch/worker/handlers/probe_signals.py` | Create | Probe one (watch, chain); record the `sessions` signal; send a link alert (no booking button) |
+| `src/showwatch/worker/scheduler.py` | Modify | Enqueue `probe_signals` for `listed` watches every `SIGNAL_INTERVAL_S` |
+| `src/showwatch/worker/runner.py`, `worker/__main__.py` | Modify | Register the handler and both chains |
+| `src/showwatch/core/settings.py`, `.env.example` | Modify | `SIGNAL_INTERVAL_S` |
+| `src/showwatch/db/repositories/watches.py` | Modify | Query the listed watches that need a probe |
+| `migrations/versions/0002_bangalore_chains.py` | Create | Enable `bms` and `district`; one city-wide pseudo-theatre each for `blr` (the scheduler needs a theatre row). `parsed_requests` moves to `0003` |
+| `scripts/explore_site.py` | Modify | `--headed --chrome` options so fixtures can be captured past the headless challenge |
+| `tests/fixtures/bms/*.html`, `tests/fixtures/district/*.html` | Create | Movie list, showtimes open, showtimes closed per chain |
+| `tests/unit/test_bms_parse.py`, `test_district_parse.py` | Create | Parse fixtures; challenge page raises `BlockedError` |
+| `tests/integration/test_probe_signals.py`, additions to `test_scheduler.py` | Create / Modify | Stage order, alert once per user, back-off on challenge, interval |
+| `docs/decisions/019`–`021`, `README.md`, `docs/plan.md` | Modify | Probe findings (done), Results row, as-built notes |
+
+Done when (replaces the "real opening" and timing lines for this milestone): fixture replay (listed → sessions) sends each alert once and in order; a live probe of an open BMS and an open District page returns `sessions` and of a closed one returns none; a 30-minute live run triggers no back-off. A real opening is a bonus, not a gate.
+
 ### M6 — Plain-language requests and title matching
 
 | Path | Action | Purpose |
