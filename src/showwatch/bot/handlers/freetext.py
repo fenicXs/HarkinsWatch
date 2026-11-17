@@ -10,6 +10,7 @@ What the work is depends on what the movie's chain can do (docs/plan.md, M6):
 - a title nothing lists yet: a watch for the title, as `/watch` does.
 """
 
+from collections import deque
 from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -25,6 +26,9 @@ from showwatch.llm.client import LLMClient
 from showwatch.llm.tasks import intent, title_match
 
 REQUEST_LIFETIME = timedelta(hours=1)
+MAX_TEXTS_PER_MINUTE = 6
+DAYS_WITHOUT_DATE = 3  # today and the next two, when only a time of day or format was given
+SLOW_DOWN = "Slow down a little: try again in a minute."
 NOT_CAUGHT = "I didn't catch that. Try /watch <movie title>."
 EXPIRED = "That request expired. Send it again."
 CITY_CHANGED = "You changed city since then. Send your request again."
@@ -49,8 +53,40 @@ def _days(parsed: dict[str, Any]) -> list[date]:
     return [start + timedelta(days=n) for n in range((end - start).days + 1)]
 
 
-def _describe(parsed: ParsedRequest, movie: Movie | None, action: str) -> str:
+CITY_NAMES = {
+    "phx": ("phoenix", "phx"),
+    "blr": ("bengaluru", "bangalore", "bengalooru", "blr"),
+}
+
+
+def _named_other_city(said: str | None, current_code: str) -> str | None:
+    """The code of a different known city the message names, else None (ignored or unknown)."""
+    if not said:
+        return None
+    word = said.strip().casefold()
+    for code, names in CITY_NAMES.items():
+        if word in names and code != current_code:
+            return code
+    return None
+
+
+def _allow(env: Env, telegram_user_id: int) -> bool:
+    """At most MAX_TEXTS_PER_MINUTE model calls per person: each message costs LLM calls."""
+    now = env.clock()
+    recent = env.recent_texts.setdefault(telegram_user_id, deque())
+    while recent and now - recent[0] > timedelta(minutes=1):
+        recent.popleft()
+    if len(recent) >= MAX_TEXTS_PER_MINUTE:
+        return False
+    recent.append(now)
+    return True
+
+
+def _describe(parsed: ParsedRequest, movie: Movie | None, action: str, *, searching: bool) -> str:
     bits = [movie.title if movie else parsed.title]
+    if not searching:
+        # A watch is not tied to a day or a time of day: do not read those back as if it were.
+        return f"{bits[0]}.\n{action}"
     days = _days(
         {
             "date_from": parsed.date_from.isoformat() if parsed.date_from else None,
@@ -88,18 +124,31 @@ async def handle_text(env: Env, sender: Sender, text: str, help_text: str) -> No
         assert city is not None
         listed = await movies.list_for_city(session, city.id, current_only=True)
 
+    if not _allow(env, sender.telegram_user_id):
+        await env.notifier.send(sender.chat_id, SLOW_DOWN)
+        return
     today = env.clock().astimezone(ZoneInfo(city.tz)).date()
     parsed = await intent.parse_request(llm, text, today=today, city_name=city.name)
     if parsed is None:
         await env.notifier.send(sender.chat_id, NOT_CAUGHT)
         return
+    other = _named_other_city(parsed.city, city.code)
+    if other is not None:
+        await env.notifier.send(
+            sender.chat_id,
+            f"That looks like a request for another city. I'm searching {city.name}: "
+            "switch with /city first, then send it again.",
+        )
+        return
     movie = await _resolve(llm, parsed.title, listed)
 
     async with env.session_factory() as session, session.begin():
+        await requests.purge_expired(session, env.clock())  # keeps the table small
         chain = await catalog.get_chain(session, movie.chain_id) if movie else None
+        searching = movie is not None and chain is not None and can_search_showtimes(chain.code)
         if movie is None:
             action = "It isn't listed yet. I'll keep watching and tell you when it appears."
-        elif chain is not None and can_search_showtimes(chain.code):
+        elif searching:
             action = "I'll look up showtimes and show you what's available."
         else:
             action = "I'll watch it and message you with a link the moment tickets open."
@@ -117,7 +166,7 @@ async def handle_text(env: Env, sender: Sender, text: str, help_text: str) -> No
         )
     await env.notifier.send(
         sender.chat_id,
-        _describe(parsed, movie, action),
+        _describe(parsed, movie, action, searching=searching),
         keyboards.confirm_intent(request_id),
     )
 
@@ -164,6 +213,10 @@ async def _act(
     assert city is not None
     today = env.clock().astimezone(ZoneInfo(city.tz)).date()
     days = [d for d in _days(payload) if today <= d < today + timedelta(days=search.DAYS_OFFERED)]
+    if not days and (payload.get("part_of_day") or payload.get("format")):
+        # No date but a time of day or screen type: look at the next few days with those
+        # filters, rather than a date picker that would forget them.
+        days = [today + timedelta(days=n) for n in range(DAYS_WITHOUT_DATE)]
     if not days:
         return "", (movie, city.tz)  # no usable date: let them pick one
     open_jobs = await queue.open_payloads_for_user(session, "search_showtimes", user.id)

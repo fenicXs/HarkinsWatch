@@ -209,7 +209,7 @@ async def test_a_kannada_title_resolves_through_the_model(env: Env, notifier: Fa
 
     await freetext.handle_text(env, _sender(1), kannada, HELP)
 
-    assert notifier.to(1)[0].startswith("Ramayana,")
+    assert notifier.to(1)[0].startswith("Ramayana.")
 
 
 async def test_a_title_nothing_lists_becomes_a_watch_for_the_words(
@@ -310,3 +310,101 @@ async def test_expired_requests_can_be_purged(env: Env) -> None:
 def test_the_parse_module_is_wired_to_the_same_floor() -> None:
     assert intent.CONFIDENCE_FLOOR == 0.6
     assert WorkerEnv  # imported for typing parity with the other flow tests
+
+
+# --- review fixes -------------------------------------------------------------------------------
+
+
+async def test_a_time_of_day_without_a_date_looks_at_the_next_days_with_the_filters(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    reply = '{"title": "Dune", "part_of_day": "evening", "format": "IMAX", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"dune imax evening": reply}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "dune imax evening", HELP)
+    await freetext.handle_intent(env, _sender(1), _confirm_id(notifier, 1))
+
+    jobs = await _jobs(env)
+    assert [j["day"] for j in jobs] == ["2026-11-16", "2026-11-17", "2026-11-18"]
+    assert all(j["part_of_day"] == "evening" and j["format"] == "IMAX" for j in jobs)
+
+
+async def test_a_watch_read_back_does_not_promise_a_day_or_time(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    reply = (
+        '{"title": "Ramayana", "date_from": "2026-11-20", "date_to": "2026-11-20", '
+        '"part_of_day": "evening", "confidence": 0.9}'
+    )
+    env = _with(env, FakeLLM(intents={"ramayana fri eve": reply}))
+    await approved_user(env.session_factory, 1, city="blr")
+    await _movie(env, "bms", "blr", "ET1", "Ramayana")
+
+    await freetext.handle_text(env, _sender(1), "ramayana fri eve", HELP)
+
+    assert notifier.to(1)[0].startswith("Ramayana.\n")
+    assert "evening" not in notifier.to(1)[0]
+
+
+async def test_naming_another_city_stops_the_request(env: Env, notifier: FakeNotifier) -> None:
+    reply = '{"title": "Dune", "city": "Bengaluru", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"dune in bengaluru": reply}))
+    await approved_user(env.session_factory, 1)  # Phoenix
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "dune in bengaluru", HELP)
+
+    assert "another city" in notifier.to(1)[0]
+    assert "/city" in notifier.to(1)[0]
+    assert await _pending_requests(env) == 0
+
+
+async def test_naming_the_current_city_or_an_unknown_one_is_fine(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    same = '{"title": "Dune", "city": "Phoenix", "confidence": 0.9}'
+    odd = '{"title": "Dune", "city": "Atlantis", "confidence": 0.9}'
+    env = _with(env, FakeLLM(intents={"a": same, "b": odd}))
+    await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    await freetext.handle_text(env, _sender(1), "a", HELP)
+    await freetext.handle_text(env, _sender(1), "b", HELP)
+
+    assert await _pending_requests(env) == 2
+
+
+async def test_plain_language_messages_are_rate_limited_per_person(
+    env: Env, notifier: FakeNotifier
+) -> None:
+    llm = FakeLLM(intents={"dune": '{"title": "Dune", "confidence": 0.9}'})
+    env = _with(env, llm)
+    await approved_user(env.session_factory, 1)
+    await approved_user(env.session_factory, 2)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+
+    for _ in range(freetext.MAX_TEXTS_PER_MINUTE + 3):
+        await freetext.handle_text(env, _sender(1), "dune", HELP)
+
+    assert notifier.to(1).count(freetext.SLOW_DOWN) == 3
+    assert len(llm.calls) <= freetext.MAX_TEXTS_PER_MINUTE * 2  # no model calls once limited
+    await freetext.handle_text(env, _sender(2), "dune", HELP)  # someone else is unaffected
+    assert freetext.SLOW_DOWN not in notifier.to(2)
+
+    later = replace(env, clock=lambda: CLOCK + timedelta(minutes=2))
+    await freetext.handle_text(later, _sender(1), "dune", HELP)  # a minute later it works again
+    assert notifier.to(1)[-1] != freetext.SLOW_DOWN
+
+
+async def test_old_requests_are_purged_as_new_ones_arrive(env: Env, notifier: FakeNotifier) -> None:
+    env = _with(env, FakeLLM(intents={"dune": '{"title": "Dune", "confidence": 0.9}'}))
+    user = await approved_user(env.session_factory, 1)
+    await _movie(env, "harkins", "phx", "dune", "Dune")
+    async with env.session_factory() as session, session.begin():
+        await requests.create(session, user.id, {"x": 1}, CLOCK - timedelta(hours=2))
+
+    await freetext.handle_text(env, _sender(1), "dune", HELP)
+
+    assert await _pending_requests(env) == 1  # only the new one
